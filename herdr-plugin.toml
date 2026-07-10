@@ -1,0 +1,18 @@
+id = "herdr-context"
+name = "Herdr Context"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Select a live Herdr agent and stage structured Neovim context without submitting it"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "pin-target"
+title = "Pin context target"
+contexts = ["global"]
+command = ["bash", "scripts/open-target-picker.sh"]
+
+[[panes]]
+id = "target-picker"
+title = "Pin context target"
+placement = "overlay"
+command = ["bash", "scripts/target-picker.sh"]

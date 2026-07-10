@@ -1,0 +1,91 @@
+local M = {}
+
+local config = require("herdr-context.config")
+local herdr = require("herdr-context.herdr")
+local targets = require("herdr-context.targets")
+
+local health = vim.health or require("health")
+
+local function has_version(major, minor)
+  local version = vim.version()
+  return version.major > major or (version.major == major and version.minor >= minor)
+end
+
+local function check_environment()
+  if vim.env.HERDR_ENV == "1" then
+    health.ok("HERDR_ENV=1")
+  else
+    health.warn("HERDR_ENV is not set; start Neovim inside a Herdr pane")
+  end
+
+  for _, name in ipairs({ "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID" }) do
+    if vim.env[name] and vim.env[name] ~= "" then
+      health.ok(name .. "=" .. vim.env[name])
+    else
+      health.warn(name .. " is missing; target ranking will be less precise")
+    end
+  end
+end
+
+local function check_companion(cfg)
+  local output, err = herdr.run(cfg, { "plugin", "list", "--plugin", "herdr-context", "--json" })
+  if not output then
+    health.warn("Could not inspect the Herdr companion plugin: " .. err)
+    return
+  end
+  if output:find('"herdr%-context"') or output:find('"id"%s*:%s*"herdr%-context"') then
+    health.ok("Herdr companion plugin is installed")
+    if vim.fn.executable("jq") == 1 then
+      health.ok("jq is available for the companion target picker")
+    else
+      health.warn("jq is missing; install it to use the companion target picker")
+    end
+  else
+    health.warn("Herdr companion plugin is not installed; run `herdr plugin install makyinmars/herdr-context.nvim`")
+  end
+end
+
+function M.check()
+  health.start("herdr-context.nvim")
+
+  if has_version(0, 10) then
+    health.ok("Neovim >= 0.10")
+  else
+    health.error("Neovim >= 0.10 is required")
+  end
+
+  local cfg = config.get()
+  local executable, path = herdr.executable(cfg)
+  if not executable then
+    health.error(("Herdr executable %q was not found; set `herdr_bin` in setup()"):format(path))
+    check_environment()
+    return
+  end
+  health.ok("Herdr executable: " .. path)
+  check_environment()
+
+  local snapshot, snapshot_err = herdr.snapshot(cfg)
+  if not snapshot then
+    health.error("Could not reach the Herdr server: " .. snapshot_err)
+    return
+  end
+  health.ok(
+    ("Connected to Herdr %s (protocol %s)"):format(snapshot.version or "unknown", snapshot.protocol or "unknown")
+  )
+
+  local candidates = targets.candidates(snapshot, { scope = cfg.target_scope })
+  if #candidates > 0 then
+    health.ok(("Found %d live target agent(s) in %s scope"):format(#candidates, cfg.target_scope))
+  else
+    health.warn(
+      ('No live target agents found in %s scope; open an agent or use `target_scope = "session"`'):format(
+        cfg.target_scope
+      )
+    )
+  end
+
+  check_companion(cfg)
+  health.info("Shared target file: " .. targets.config_file())
+end
+
+return M
