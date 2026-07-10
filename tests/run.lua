@@ -47,6 +47,7 @@ local state = require("herdr-context.state")
 local targets = require("herdr-context.targets")
 local transport = require("herdr-context.transport")
 local watch = require("herdr-context.watch")
+local provider_fixtures = dofile(vim.fn.getcwd() .. "/tests/fixtures/provider-inputs.lua")
 
 local function buffer(lines, name, filetype)
   local bufnr = vim.api.nvim_create_buf(false, false)
@@ -900,11 +901,385 @@ test("renders the drawer with stable pane mappings and actions", function()
   vim.env.HERDR_TAB_ID = old_env.HERDR_TAB_ID
 end)
 
+test("builds deterministic exact bundles with safe fences and deduplication", function()
+  local bundle = require("herdr-context.bundle")
+  local built = bundle.build({
+    {
+      id = "diagnostics",
+      title = "Diagnostics",
+      priority = 30,
+      format = "diagnostics",
+      items = {
+        { severity = vim.diagnostic.severity.ERROR, source = "lua", code = 12, lnum = 3, message = "Bad\nvalue" },
+      },
+      fingerprint = "diagnostics:one",
+    },
+    {
+      id = "symbol",
+      title = "Current symbol",
+      priority = 20,
+      reference = "@lua/sample.lua#L2-L4",
+      language = "lua",
+      content = "local marker = [[```]]",
+      format = "code",
+      fingerprint = "symbol:one",
+    },
+    {
+      id = "symbol-copy",
+      title = "Duplicate",
+      priority = 1,
+      content = "must not render",
+      format = "text",
+      fingerprint = "symbol:one",
+    },
+  }, 64 * 1024)
+  truthy(built)
+  eq(2, #built.sections)
+  eq(#built.payload, built.bytes)
+  truthy(built.payload:find("## Current symbol", 1, true) < built.payload:find("## Diagnostics", 1, true))
+  contains(built.payload, "````lua\nlocal marker = [[```]]\n````")
+  contains(built.payload, "- ERROR [lua:12] L4: Bad value")
+  truthy(not built.payload:find("must not render", 1, true))
+
+  local oversized = bundle.build(built.sections, 8)
+  eq(true, oversized.oversized)
+  contains(oversized.error, tostring(oversized.bytes))
+end)
+
+test("deduplicates matching quickfix and Trouble items without dropping sections", function()
+  local bundle = require("herdr-context.bundle")
+  local item = { path = "src/main.lua", line = 4, column = 2, type = "E", message = "Broken" }
+  local built = bundle.build({
+    {
+      id = "quickfix",
+      title = "Quickfix",
+      priority = 40,
+      format = "list",
+      items = { item },
+      fingerprint = "quickfix:list",
+    },
+    {
+      id = "trouble",
+      title = "Trouble",
+      priority = 60,
+      format = "list",
+      items = { vim.tbl_extend("force", item, { severity = "ERROR", type = nil }) },
+      fingerprint = "trouble:list",
+    },
+  }, 10000)
+  eq(2, #built.sections)
+  eq(1, #built.sections[1].items)
+  eq(0, #built.sections[2].items)
+  contains(built.payload, "## Trouble")
+  contains(built.payload, "No unique valid items")
+end)
+
+test("isolates provider timeouts, cancellation, and repeated callbacks", function()
+  local registry = require("herdr-context.providers")
+  registry._reset()
+  local cancelled = 0
+  registry.register({
+    id = "test-fast",
+    name = "Fast",
+    collect = function(_, callback)
+      vim.defer_fn(function()
+        callback({ id = "test-fast", title = "Fast", content = "first", format = "text" })
+        callback({ id = "test-fast", title = "Fast", content = "second", format = "text" })
+      end, 1)
+    end,
+  })
+  registry.register({
+    id = "test-timeout",
+    name = "Timeout",
+    collect = function()
+      return function()
+        cancelled = cancelled + 1
+      end
+    end,
+  })
+  local result
+  registry.collect({}, { ids = { "test-fast", "test-timeout" }, timeout_ms = 15 }, function(entries)
+    result = entries
+  end)
+  truthy(
+    vim.wait(200, function()
+      return result ~= nil
+    end),
+    "provider collection did not complete"
+  )
+  local by_id = {}
+  for _, entry in ipairs(result) do
+    by_id[entry.id] = entry
+  end
+  eq("available", by_id["test-fast"].status)
+  eq("first", by_id["test-fast"].section.content)
+  eq("failed", by_id["test-timeout"].status)
+  contains(by_id["test-timeout"].error, "Timed out")
+  eq(1, cancelled)
+end)
+
+test("selects the innermost deterministic LSP document symbol", function()
+  local symbol = require("herdr-context.providers.symbol")
+  local bufnr = buffer({ "outer", "inner", "body", "end", "done" }, vim.fn.getcwd() .. "/src/symbol.lua")
+  local request = {
+    bufnr = bufnr,
+    cursor = { 3, 1 },
+    path = vim.api.nvim_buf_get_name(bufnr),
+    relative_path = "src/symbol.lua",
+    filetype = "lua",
+    modified = true,
+    changedtick = vim.api.nvim_buf_get_changedtick(bufnr),
+  }
+  local old_get_clients = vim.lsp.get_clients
+  local function client(id, name, result)
+    return {
+      id = id,
+      name = name,
+      supports_method = function()
+        return true
+      end,
+      request = function(_, _, _, handler)
+        handler(nil, result)
+        return true, id
+      end,
+      cancel_request = function() end,
+    }
+  end
+  vim.lsp.get_clients = function()
+    return {
+      client(2, "z-client", provider_fixtures.lsp.document_symbols),
+      client(1, "a-client", provider_fixtures.lsp.symbol_information),
+    }
+  end
+  config.setup({ providers = { symbol = { lsp = true, treesitter_fallback = false } } })
+  local section, symbol_err
+  symbol.collect(request, function(value, err)
+    section, symbol_err = value, err
+  end)
+  vim.lsp.get_clients = old_get_clients
+  truthy(section, symbol_err)
+  eq("inner-a", section.symbol_name)
+  eq("L2-L4", section.summary:match("L%d+%-L%d+"))
+  eq("inner\nbody\nend", section.content)
+  delete_buffer(bufnr)
+end)
+
+test("renders MiniDiff change, add, and zero-line delete hunks", function()
+  local mini = require("herdr-context.providers.hunk.mini_diff")
+  local bufnr = buffer({ "one", "new", "three" })
+  local request = { bufnr = bufnr }
+  local changed = mini.render(request, { ref_text = "one\nold\nthree\n" }, provider_fixtures.mini_diff.change, 1)
+  eq("@@ -1,3 +1,3 @@\n one\n-old\n+new\n three", changed)
+
+  local added = mini.render(request, { ref_text = "one\nthree\n" }, provider_fixtures.mini_diff.add, 1)
+  contains(added, "+new")
+  eq("add", mini.find_hunk({ { buf_start = 2, buf_count = 1, type = "add" } }, 2).type)
+
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "one", "three" })
+  local deleted = mini.render(request, { ref_text = "one\nold\nthree\n" }, provider_fixtures.mini_diff.delete, 1)
+  contains(deleted, "-old")
+  eq("delete", mini.find_hunk({ { buf_start = 0, buf_count = 0, type = "delete" } }, 1).type)
+  delete_buffer(bufnr)
+end)
+
+test("parses and locates saved Git diff hunks", function()
+  local git_hunk = require("herdr-context.providers.hunk.git")
+  local hunks = git_hunk.parse_hunks(table.concat({
+    "diff --git a/a.lua b/a.lua",
+    "--- a/a.lua",
+    "+++ b/a.lua",
+    "@@ -2,2 +2,3 @@ function demo()",
+    " same",
+    "-old",
+    "+new",
+    "+more",
+    "@@ -10 +11,0 @@",
+    "-gone",
+  }, "\n"))
+  eq(2, #hunks)
+  eq(3, hunks[1].new_count)
+  eq(1, hunks[2].old_count)
+  eq(0, hunks[2].new_count)
+  local first, start_line, end_line = git_hunk.find_hunk(hunks, 4)
+  truthy(first)
+  eq(2, start_line)
+  eq(4, end_line)
+  truthy(git_hunk.find_hunk(hunks, 11))
+end)
+
+test("normalizes quickfix lists and reports invalid entries", function()
+  local quickfix = require("herdr-context.providers.quickfix").providers[1]
+  local bufnr = buffer({ "bad" }, vim.fn.getcwd() .. "/src/quickfix.lua")
+  vim.fn.setqflist({}, " ", {
+    title = "Build errors",
+    items = {
+      { bufnr = bufnr, lnum = 1, col = 2, type = "E", text = "Bad\nvalue" },
+      { valid = 0, text = "invalid" },
+    },
+  })
+  local section, qf_err
+  quickfix.collect({ cwd = vim.fn.getcwd(), winid = vim.api.nvim_get_current_win() }, function(value, err)
+    section, qf_err = value, err
+  end)
+  truthy(section, qf_err)
+  eq("Build errors", section.title)
+  eq(1, #section.items)
+  eq(1, section.invalid_count)
+  eq("src/quickfix.lua", section.items[1].path)
+  eq("Bad value", section.items[1].message)
+  vim.fn.setqflist({}, "f")
+  delete_buffer(bufnr)
+end)
+
+test("normalizes loaded Trouble views and stays optional when absent", function()
+  local trouble_provider = require("herdr-context.providers.trouble")
+  local old_trouble = package.loaded.trouble
+  config.setup({ providers = { trouble = { enabled = true, modes = { "diagnostics", "quickfix" } } } })
+  package.loaded.trouble = nil
+  local available, reason = trouble_provider.available()
+  eq(false, available)
+  contains(reason, "not loaded")
+
+  package.loaded.trouble = {
+    is_open = function(mode)
+      return mode == "diagnostics"
+    end,
+    get_items = function()
+      return provider_fixtures.trouble
+    end,
+  }
+  available = trouble_provider.available()
+  local section, trouble_err
+  trouble_provider.collect({ cwd = vim.fn.getcwd() }, function(value, err)
+    section, trouble_err = value, err
+  end)
+  package.loaded.trouble = old_trouble
+  eq(true, available)
+  truthy(section, trouble_err)
+  eq(1, #section.items)
+  eq("src/trouble.lua", section.items[1].path)
+  eq(8, section.items[1].line)
+  eq("ERROR", section.items[1].severity)
+end)
+
+test("marks composer payloads stale and renders exact preview in a native scratch buffer", function()
+  local bundle = require("herdr-context.bundle")
+  local composer = require("herdr-context.composer")
+  local composer_ui = require("herdr-context.ui.composer")
+  config.setup({ submit = true, presence = { enabled = false } })
+  local source = buffer({ "return true" }, vim.fn.getcwd() .. "/lua/composer-test.lua")
+  vim.api.nvim_set_current_buf(source)
+  local request = composer.capture_request({ bufnr = source, winid = vim.api.nvim_get_current_win(), line = 1 })
+  local session = composer._create_session(request)
+  session.entries = {
+    {
+      id = "selection",
+      name = "Current line",
+      status = "available",
+      section = {
+        id = "selection",
+        title = "Current line",
+        priority = 10,
+        reference = "@lua/composer-test.lua#L1",
+        language = "lua",
+        content = "return true",
+        format = "code",
+        fingerprint = "selection:test",
+      },
+    },
+  }
+  session.selected.selection = true
+  session.bundle = bundle.build({ session.entries[1].section }, config.get().max_payload_bytes)
+  local ui_buf = composer_ui.open(session)
+  eq("nofile", vim.bo[ui_buf].buftype)
+  eq("wipe", vim.bo[ui_buf].bufhidden)
+  eq(false, vim.bo[ui_buf].swapfile)
+  eq("herdr-context-composer", vim.bo[ui_buf].filetype)
+  local rendered = table.concat(vim.api.nvim_buf_get_lines(ui_buf, 0, -1, false), "\n")
+  contains(rendered, session.bundle.payload)
+  contains(rendered, "s stage + submit")
+
+  vim.api.nvim_buf_set_lines(source, 0, -1, false, { "return false" })
+  eq(true, session:is_stale())
+  local original_transport_stage = transport.stage
+  local stage_calls = 0
+  transport.stage = function()
+    stage_calls = stage_calls + 1
+  end
+  session:stage()
+  transport.stage = original_transport_stage
+  eq(0, stage_calls)
+  session:close()
+  delete_buffer(source)
+end)
+
+test("applies mode-aware composer defaults and current-line fallback", function()
+  local composer = require("herdr-context.composer")
+  config.setup({})
+  local function entries()
+    return {
+      {
+        id = "selection",
+        name = "Current line",
+        status = "available",
+        section = { range = { start_line = 7, end_line = 7 } },
+      },
+      {
+        id = "symbol",
+        name = "Current symbol",
+        status = "available",
+        section = { range = { start_line = 4, end_line = 12 } },
+      },
+      {
+        id = "hunk",
+        name = "Current hunk",
+        status = "available",
+        section = { range = { start_line = 6, end_line = 9 } },
+      },
+      {
+        id = "diagnostics",
+        name = "Diagnostics",
+        status = "available",
+        section = { range = { start_line = 7, end_line = 7 } },
+      },
+    }
+  end
+
+  local normal = {
+    request = { selection = nil },
+    entries = entries(),
+  }
+  composer._apply_defaults(normal)
+  eq(true, normal.selected.symbol)
+  eq(true, normal.selected.hunk)
+  eq(nil, normal.selected.selection)
+  eq(true, normal.selected.diagnostics)
+
+  local visual = {
+    request = { selection = { mode = "v" } },
+    entries = entries(),
+  }
+  composer._apply_defaults(visual)
+  eq(true, visual.selected.selection)
+  eq(nil, visual.selected.symbol)
+  eq(nil, visual.selected.hunk)
+  eq(true, visual.selected.diagnostics)
+
+  normal.entries[2].status = "unavailable"
+  normal.entries[3].status = "unavailable"
+  composer._apply_defaults(normal)
+  eq(true, normal.selected.selection)
+end)
+
 test("registers all user commands", function()
   for _, name in ipairs({
     "HerdrContextReference",
     "HerdrContextSend",
     "HerdrContextDiagnostics",
+    "HerdrContextCompose",
+    "HerdrContextSymbol",
+    "HerdrContextHunk",
+    "HerdrContextQuickfix",
     "HerdrContextTarget",
     "HerdrContextAgents",
     "HerdrContextRefresh",

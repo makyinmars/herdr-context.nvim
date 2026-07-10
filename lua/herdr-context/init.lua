@@ -89,6 +89,30 @@ function M.diagnostics(opts)
   stage("diagnostics", opts)
 end
 
+function M.compose(opts)
+  return require("herdr-context.composer").open(opts)
+end
+
+function M.symbol(opts)
+  return require("herdr-context.composer").stage_provider("symbol", opts)
+end
+
+function M.hunk(opts)
+  return require("herdr-context.composer").stage_provider("hunk", opts)
+end
+
+function M.quickfix(opts)
+  return require("herdr-context.composer").stage_provider("quickfix", opts)
+end
+
+function M.location_list(opts)
+  return require("herdr-context.composer").stage_provider("location_list", opts)
+end
+
+function M.register_provider(provider)
+  return require("herdr-context.providers").register(provider)
+end
+
 function M.select_target()
   local cfg = config.get()
   targets.resolve(cfg, picker, { force = true }, function(target, err)

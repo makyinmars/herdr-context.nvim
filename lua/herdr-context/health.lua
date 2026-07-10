@@ -46,6 +46,47 @@ local function check_companion(cfg)
   end
 end
 
+local function check_providers(cfg)
+  local count = #require("herdr-context.providers").list()
+  health.ok(("Context composer has %d registered provider%s"):format(count, count == 1 and "" or "s"))
+
+  if cfg.providers.symbol.enabled then
+    local lsp = vim.lsp.get_clients and vim.lsp.get_clients({ bufnr = 0 }) or vim.lsp.get_active_clients({ bufnr = 0 })
+    local supports_symbols = false
+    for _, client in ipairs(lsp) do
+      local ok, supported = pcall(client.supports_method, client, "textDocument/documentSymbol")
+      supports_symbols = supports_symbols or (ok and supported)
+    end
+    if supports_symbols then
+      health.ok("Symbol provider: LSP document symbols")
+    elseif cfg.providers.symbol.treesitter_fallback then
+      local ok = pcall(vim.treesitter.get_parser, 0)
+      health.info(ok and "Symbol provider: Treesitter fallback" or "Symbol provider: no backend for current buffer")
+    else
+      health.info("Symbol provider: no backend for current buffer")
+    end
+  else
+    health.info("Symbol provider is disabled")
+  end
+
+  local mini = package.loaded["mini.diff"] or _G.MiniDiff
+  if mini and type(mini.get_buf_data) == "function" then
+    health.ok("Hunk provider: MiniDiff (supports unsaved changes)")
+  elseif vim.fn.executable("git") == 1 then
+    health.info("Hunk provider: saved-buffer Git fallback; load MiniDiff for unsaved changes")
+  else
+    health.warn("Hunk provider has no available backend")
+  end
+
+  if not cfg.providers.trouble.enabled then
+    health.info("Trouble provider is disabled")
+  elseif package.loaded.trouble then
+    health.ok("Trouble provider is loaded")
+  else
+    health.info("Trouble provider is optional and currently unloaded")
+  end
+end
+
 function M.check()
   health.start("herdr-context.nvim")
 
@@ -56,6 +97,7 @@ function M.check()
   end
 
   local cfg = config.get()
+  check_providers(cfg)
   if not cfg.presence.enabled then
     health.info("Background presence is disabled")
   else

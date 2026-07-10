@@ -21,6 +21,22 @@ vim.api.nvim_create_user_command("HerdrContextDiagnostics", function(args)
   require("herdr-context").diagnostics(command_opts(args))
 end, { desc = "Stage diagnostics for a line or range in a Herdr agent prompt", range = true })
 
+vim.api.nvim_create_user_command("HerdrContextCompose", function(args)
+  require("herdr-context").compose(command_opts(args))
+end, { desc = "Compose and preview context for a Herdr agent", range = true })
+
+vim.api.nvim_create_user_command("HerdrContextSymbol", function()
+  require("herdr-context").symbol()
+end, { desc = "Stage the current symbol in a Herdr agent prompt" })
+
+vim.api.nvim_create_user_command("HerdrContextHunk", function()
+  require("herdr-context").hunk()
+end, { desc = "Stage the Git hunk under the cursor in a Herdr agent prompt" })
+
+vim.api.nvim_create_user_command("HerdrContextQuickfix", function()
+  require("herdr-context").quickfix()
+end, { desc = "Stage the current quickfix list in a Herdr agent prompt" })
+
 vim.api.nvim_create_user_command("HerdrContextTarget", function()
   require("herdr-context").select_target()
 end, { desc = "Select the destination Herdr agent" })

@@ -35,6 +35,14 @@ Install the Neovim side with lazy.nvim:
   opts = {},
   keys = {
     {
+      "<leader>ac",
+      function()
+        require("herdr-context").compose()
+      end,
+      mode = { "n", "v" },
+      desc = "Compose Herdr Context",
+    },
+    {
       "<leader>ay",
       function()
         require("herdr-context").reference()
@@ -104,12 +112,16 @@ herdr plugin link /path/to/herdr-context.nvim
 | `:HerdrContextReference` | Stage `@path#L10-L20` |
 | `:HerdrContextSend` | Stage the reference and selected code |
 | `:HerdrContextDiagnostics` | Stage diagnostics for the current line or selection |
+| `:HerdrContextCompose` | Collect, preview, and stage a combined context bundle |
+| `:HerdrContextSymbol` | Stage the innermost symbol under the cursor |
+| `:HerdrContextHunk` | Stage the Git hunk under the cursor |
+| `:HerdrContextQuickfix` | Stage the current quickfix list |
 | `:HerdrContextTarget` | Choose or change the destination agent |
 | `:HerdrContextAgents` | Toggle the live agent drawer |
 | `:HerdrContextRefresh` | Force a cached-state refresh |
 | `:checkhealth herdr-context` | Check Neovim, environment, Herdr, agents, and the companion plugin |
 
-The three context commands accept an Ex range. Lua calls made from Visual mode preserve linewise,
+The range-aware context commands accept an Ex range. Lua calls made from Visual mode preserve linewise,
 characterwise, reversed, and blockwise selections.
 
 ## Configuration
@@ -121,6 +133,40 @@ require("herdr-context").setup({
   max_payload_bytes = 64 * 1024,
   target_scope = "workspace", -- "tab", "workspace", or "session"
   remember_target = "session", -- "none", "session", or "workspace"
+
+  composer = {
+    layout = "float",
+    width = 0.85,
+    height = 0.8,
+    provider_timeout_ms = 1500,
+    hunk_context_lines = 3,
+    preview = true,
+    defaults = {
+      selection = true,
+      symbol = true,
+      hunk = true,
+      diagnostics = true,
+      quickfix = false,
+      location_list = false,
+      trouble = false,
+    },
+  },
+
+  providers = {
+    symbol = {
+      enabled = true,
+      lsp = true,
+      treesitter_fallback = true,
+    },
+    hunk = {
+      enabled = true,
+      backends = { "mini_diff", "git" },
+    },
+    trouble = {
+      enabled = true,
+      modes = { "diagnostics", "quickfix" },
+    },
+  },
 
   presence = {
     enabled = true,
@@ -186,6 +232,59 @@ injecting literal newline bytes into an agent that may interpret them as Enter.
 The bracketed-paste contract has been checked end-to-end with Herdr 0.7.3 against Codex CLI 0.144.0
 and Claude Code 2.1.160: both lines remained in the input editor and each agent stayed `idle`. Unknown
 or newly introduced agent families remain on the conservative context-file path until configured.
+
+## Context composer
+
+The composer freezes the source buffer, cursor, selection, changedtick, path, and working directory
+before providers begin. Providers collect independently, and one timeout or failure does not block the
+others. The checklist shows provider status and byte size while the lower pane contains the exact
+Markdown payload that will be staged.
+
+Normal mode selects the innermost symbol, the hunk under the cursor, and diagnostics scoped to the
+symbol (then the hunk). If neither symbol nor hunk is available, it selects the current line. Visual
+mode selects the exact Visual range and overlapping diagnostics, leaving symbol and hunk unchecked.
+Quickfix, location-list, and Trouble sources are deliberately opt-in defaults.
+
+Composer controls are:
+
+- `<Space>`: toggle the provider under the cursor;
+- `t`: choose a target and return to the composer;
+- `r`: recapture the source and rerun providers;
+- `s`: stage the exact preview (or stage and submit when `submit = true`);
+- `p`: toggle the full payload preview;
+- `q` or `<Esc>`: cancel.
+
+Editing the source buffer marks the preview stale and disables staging until it is refreshed. The
+combined final payload—including headings and Markdown fences—is rejected when it exceeds
+`max_payload_bytes`; sections are never silently truncated or dropped.
+
+The symbol provider asks every eligible LSP client for document symbols, deterministically chooses the
+smallest containing range, and falls back to Treesitter. The hunk provider prefers MiniDiff because it
+can include unsaved changes, then uses `git diff` for saved buffers. Trouble is only consulted when the
+plugin is loaded and a configured view is open.
+
+Custom providers use the same timeout, preview, and byte-budget path:
+
+```lua
+require("herdr-context").register_provider({
+  id = "custom-build",
+  name = "Build output",
+  priority = 70,
+  collect = function(request, callback)
+    callback({
+      id = "custom-build",
+      title = "Build output",
+      content = "...",
+      format = "text",
+      fingerprint = "custom-build:latest",
+    })
+  end,
+})
+```
+
+`collect` may return a cancellation function. It must call its callback at most once with either a
+normalized section or an error. Optional integrations should report unavailable state instead of
+throwing; `:checkhealth herdr-context` summarizes the currently usable backends.
 
 ## Live presence
 
@@ -320,8 +419,7 @@ make lint
 make test-live
 ```
 
-The headless suite covers normal and visual ranges, modified and unnamed buffers, Git-relative paths,
-backtick fences, Unicode byte limits, diagnostics, target ranking, immutable state, socket framing,
-event debouncing, polling fallback, statusline rendering, drawer mappings, stale targets, context-file
-fallback, and proof that default transport does not invoke Enter. Transport tests use a fake Herdr
+The headless suite also covers deterministic bundles, provider timeout and cancellation, LSP symbol
+fixtures, MiniDiff add/change/delete hunks, Git diff parsing, quickfix normalization, stale composer
+buffers, exact preview rendering, and combined byte budgets. Transport tests use a fake Herdr
 executable; presence tests use sanitized socket fixtures and fake clients.

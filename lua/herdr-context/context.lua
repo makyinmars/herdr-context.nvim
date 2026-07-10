@@ -99,6 +99,12 @@ local function visual_selection(bufnr)
   }
 end
 
+function M.visual_selection(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  local selection = visual_selection(bufnr)
+  return selection and vim.deepcopy(selection) or nil
+end
+
 local function selection_text(bufnr, selection)
   local first, last = normalize_position(selection.start, selection.finish)
   local mode = selection.mode

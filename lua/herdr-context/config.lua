@@ -14,6 +14,38 @@ local defaults = {
     codex = true,
   },
   context_file_dir = nil,
+  composer = {
+    layout = "float",
+    width = 0.85,
+    height = 0.8,
+    provider_timeout_ms = 1500,
+    hunk_context_lines = 3,
+    preview = true,
+    defaults = {
+      selection = true,
+      symbol = true,
+      hunk = true,
+      diagnostics = true,
+      quickfix = false,
+      location_list = false,
+      trouble = false,
+    },
+  },
+  providers = {
+    symbol = {
+      enabled = true,
+      lsp = true,
+      treesitter_fallback = true,
+    },
+    hunk = {
+      enabled = true,
+      backends = { "mini_diff", "git" },
+    },
+    trouble = {
+      enabled = true,
+      modes = { "diagnostics", "quickfix" },
+    },
+  },
   presence = {
     enabled = true,
     socket = true,
@@ -69,6 +101,8 @@ local function validate(opts)
     auto_select = { opts.auto_select, "boolean" },
     multiline_strategy = { opts.multiline_strategy, "string" },
     bracketed_paste_agents = { opts.bracketed_paste_agents, "table" },
+    composer = { opts.composer, "table" },
+    providers = { opts.providers, "table" },
     presence = { opts.presence, "table" },
     agents_view = { opts.agents_view, "table" },
     statusline = { opts.statusline, "table" },
@@ -90,6 +124,23 @@ local function validate(opts)
     ["statusline.show_connection"] = { opts.statusline.show_connection, "boolean" },
     ["statusline.compact"] = { opts.statusline.compact, "boolean" },
     ["statusline.icons"] = { opts.statusline.icons, "table" },
+    ["composer.layout"] = { opts.composer.layout, "string" },
+    ["composer.width"] = { opts.composer.width, "number" },
+    ["composer.height"] = { opts.composer.height, "number" },
+    ["composer.provider_timeout_ms"] = { opts.composer.provider_timeout_ms, "number" },
+    ["composer.hunk_context_lines"] = { opts.composer.hunk_context_lines, "number" },
+    ["composer.preview"] = { opts.composer.preview, "boolean" },
+    ["composer.defaults"] = { opts.composer.defaults, "table" },
+    ["providers.symbol"] = { opts.providers.symbol, "table" },
+    ["providers.symbol.enabled"] = { opts.providers.symbol.enabled, "boolean" },
+    ["providers.symbol.lsp"] = { opts.providers.symbol.lsp, "boolean" },
+    ["providers.symbol.treesitter_fallback"] = { opts.providers.symbol.treesitter_fallback, "boolean" },
+    ["providers.hunk"] = { opts.providers.hunk, "table" },
+    ["providers.hunk.enabled"] = { opts.providers.hunk.enabled, "boolean" },
+    ["providers.hunk.backends"] = { opts.providers.hunk.backends, "table" },
+    ["providers.trouble"] = { opts.providers.trouble, "table" },
+    ["providers.trouble.enabled"] = { opts.providers.trouble.enabled, "boolean" },
+    ["providers.trouble.modes"] = { opts.providers.trouble.modes, "table" },
   })
 
   if opts.max_payload_bytes <= 0 or opts.max_payload_bytes % 1 ~= 0 then
@@ -100,6 +151,33 @@ local function validate(opts)
   validate_choice("remember_target", opts.remember_target, { "none", "session", "workspace" })
   validate_choice("multiline_strategy", opts.multiline_strategy, { "auto", "bracketed_paste", "context_file" })
   validate_choice("agents_view.position", opts.agents_view.position, { "left", "right" })
+  validate_choice("composer.layout", opts.composer.layout, { "float" })
+
+  for _, key in ipairs({ "width", "height" }) do
+    local value = opts.composer[key]
+    if value <= 0 then
+      error("herdr-context: composer." .. key .. " must be greater than zero")
+    end
+  end
+  if opts.composer.provider_timeout_ms <= 0 or opts.composer.provider_timeout_ms % 1 ~= 0 then
+    error("herdr-context: composer.provider_timeout_ms must be a positive integer")
+  end
+  if opts.composer.hunk_context_lines < 0 or opts.composer.hunk_context_lines % 1 ~= 0 then
+    error("herdr-context: composer.hunk_context_lines must be a non-negative integer")
+  end
+  for name, value in pairs(opts.composer.defaults) do
+    if type(value) ~= "boolean" then
+      error("herdr-context: composer.defaults." .. tostring(name) .. " must be a boolean")
+    end
+  end
+  for _, backend in ipairs(opts.providers.hunk.backends) do
+    validate_choice("providers.hunk.backends", backend, { "mini_diff", "git" })
+  end
+  for _, mode in ipairs(opts.providers.trouble.modes) do
+    if type(mode) ~= "string" or mode == "" then
+      error("herdr-context: providers.trouble.modes entries must be non-empty strings")
+    end
+  end
 
   for _, key in ipairs({ "poll_interval_ms", "reconnect_max_ms", "debounce_ms" }) do
     local value = opts.presence[key]
