@@ -2,6 +2,7 @@ local M = {}
 
 local config = require("herdr-context.config")
 local herdr = require("herdr-context.herdr")
+local state = require("herdr-context.state")
 local targets = require("herdr-context.targets")
 
 local health = vim.health or require("health")
@@ -55,6 +56,25 @@ function M.check()
   end
 
   local cfg = config.get()
+  if not cfg.presence.enabled then
+    health.info("Background presence is disabled")
+  else
+    local current = state.get()
+    local socket_path = vim.env.HERDR_SOCKET_PATH
+    if socket_path and socket_path ~= "" then
+      if (vim.uv or vim.loop).fs_stat(socket_path) then
+        health.ok("Herdr socket: " .. socket_path)
+      else
+        health.warn("HERDR_SOCKET_PATH does not exist: " .. socket_path)
+      end
+    elseif cfg.presence.socket then
+      health.warn("HERDR_SOCKET_PATH is missing; presence will use polling")
+    end
+    local connection = current.connected and "connected" or "disconnected"
+    local stale = current.stale and ", stale" or ""
+    health.info(("Presence: %s (%s%s)"):format(current.mode, connection, stale))
+  end
+
   local executable, path = herdr.executable(cfg)
   if not executable then
     health.error(("Herdr executable %q was not found; set `herdr_bin` in setup()"):format(path))

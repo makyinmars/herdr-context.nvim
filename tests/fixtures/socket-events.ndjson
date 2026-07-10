@@ -1,0 +1,3 @@
+{"id":"herdr-context:1","result":{"type":"subscription_started"}}
+{"event":"pane_agent_status_changed","data":{"type":"pane_agent_status_changed","pane_id":"w0:pB","workspace_id":"w0","agent":"codex","agent_status":"idle"}}
+{"event":"pane_closed","data":{"type":"pane_closed","pane_id":"w1:p2","workspace_id":"w1"}}

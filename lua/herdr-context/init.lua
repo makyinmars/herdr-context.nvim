@@ -4,8 +4,10 @@ local config = require("herdr-context.config")
 local context = require("herdr-context.context")
 local format = require("herdr-context.format")
 local picker = require("herdr-context.picker")
+local state = require("herdr-context.state")
 local targets = require("herdr-context.targets")
 local transport = require("herdr-context.transport")
+local watch = require("herdr-context.watch")
 
 local function notify(message, level)
   vim.notify(message, level or vim.log.levels.INFO, { title = "herdr-context.nvim" })
@@ -69,7 +71,10 @@ local function stage(kind, opts)
 end
 
 function M.setup(opts)
-  return config.setup(opts)
+  local cfg = config.setup(opts)
+  require("herdr-context.ui.statusline").setup()
+  watch.start(cfg)
+  return cfg
 end
 
 function M.reference(opts)
@@ -94,6 +99,25 @@ function M.select_target()
       return
     end
     notify(("Herdr target: %s (%s)"):format(target.agent or "agent", target.pane_id))
+  end)
+end
+
+function M.statusline()
+  return require("herdr-context.ui.statusline").get()
+end
+
+function M.agents()
+  require("herdr-context.ui.agents").toggle()
+end
+
+function M.refresh(callback)
+  state.refresh({ force = true }, function(current, err)
+    if err then
+      notify("Could not refresh Herdr state: " .. err, vim.log.levels.ERROR)
+    end
+    if callback then
+      callback(current, err)
+    end
   end)
 end
 

@@ -24,3 +24,11 @@ end, { desc = "Stage diagnostics for a line or range in a Herdr agent prompt", r
 vim.api.nvim_create_user_command("HerdrContextTarget", function()
   require("herdr-context").select_target()
 end, { desc = "Select the destination Herdr agent" })
+
+vim.api.nvim_create_user_command("HerdrContextAgents", function()
+  require("herdr-context").agents()
+end, { desc = "Toggle the live Herdr agent drawer" })
+
+vim.api.nvim_create_user_command("HerdrContextRefresh", function()
+  require("herdr-context").refresh()
+end, { desc = "Force a refresh of live Herdr state" })

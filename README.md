@@ -1,6 +1,7 @@
 # herdr-context.nvim
 
-Stage code context from Neovim in a live [Herdr](https://herdr.dev) agent prompt without submitting it.
+See live [Herdr](https://herdr.dev) agents inside Neovim and stage code context in their prompts without
+submitting it.
 
 `herdr-context.nvim` is one repository with two install surfaces:
 
@@ -30,6 +31,7 @@ Install the Neovim side with lazy.nvim:
 {
   "makyinmars/herdr-context.nvim",
   cond = vim.env.HERDR_ENV == "1",
+  lazy = false, -- keeps :checkhealth herdr-context discoverable before the first mapping
   opts = {},
   keys = {
     {
@@ -63,6 +65,20 @@ Install the Neovim side with lazy.nvim:
       end,
       desc = "Select Herdr Agent",
     },
+    {
+      "<leader>aa",
+      function()
+        require("herdr-context").agents()
+      end,
+      desc = "Toggle Herdr Agents",
+    },
+    {
+      "<leader>ar",
+      function()
+        require("herdr-context").refresh()
+      end,
+      desc = "Refresh Herdr Agents",
+    },
   },
 }
 ```
@@ -89,6 +105,8 @@ herdr plugin link /path/to/herdr-context.nvim
 | `:HerdrContextSend` | Stage the reference and selected code |
 | `:HerdrContextDiagnostics` | Stage diagnostics for the current line or selection |
 | `:HerdrContextTarget` | Choose or change the destination agent |
+| `:HerdrContextAgents` | Toggle the live agent drawer |
+| `:HerdrContextRefresh` | Force a cached-state refresh |
 | `:checkhealth herdr-context` | Check Neovim, environment, Herdr, agents, and the companion plugin |
 
 The three context commands accept an Ex range. Lua calls made from Visual mode preserve linewise,
@@ -103,8 +121,49 @@ require("herdr-context").setup({
   max_payload_bytes = 64 * 1024,
   target_scope = "workspace", -- "tab", "workspace", or "session"
   remember_target = "session", -- "none", "session", or "workspace"
+
+  presence = {
+    enabled = true,
+    socket = true,
+    poll_interval_ms = 3000,
+    reconnect_max_ms = 10000,
+    debounce_ms = 100,
+    notifications = {
+      idle = false,
+      blocked = false,
+    },
+  },
+
+  agents_view = {
+    position = "right", -- "left" or "right"
+    width = 44,
+    show_cwd = true,
+    show_workspace = true,
+    show_tab = true,
+  },
+
+  statusline = {
+    show_target = true,
+    show_agent_count = true,
+    show_connection = true,
+    compact = false,
+    icons = {
+      herdr = "Herdr",
+      target = "▶",
+      idle = "●",
+      working = "◉",
+      blocked = "!",
+      done = "●",
+      unknown = "○",
+      disconnected = "×",
+      separator = "·",
+    },
+  },
 })
 ```
+
+Set `presence.enabled = false` to disable the bootstrap snapshot, socket subscription, reconnect timers,
+and polling fallback. Existing v0.1 configurations remain valid.
 
 Additional transport options are available for unusual agents:
 
@@ -128,9 +187,65 @@ The bracketed-paste contract has been checked end-to-end with Herdr 0.7.3 agains
 and Claude Code 2.1.160: both lines remained in the input editor and each agent stayed `idle`. Unknown
 or newly introduced agent families remain on the conservative context-file path until configured.
 
+## Live presence
+
+One shared state store serves the statusline, agent drawer, and target UI. Setup fetches an initial
+snapshot, then subscribes to Herdr events over `HERDR_SOCKET_PATH`. Events are invalidation signals:
+bursts are debounced and produce one fresh snapshot. If the socket disconnects, cached data is marked
+stale, polling starts, and socket reconnects use exponential backoff. Polling stops after reconnect.
+Every pipe and timer closes on `VimLeavePre`.
+
+The statusline reads only cached Lua state; it never starts a process or performs socket I/O during a
+redraw:
+
+```lua
+require("herdr-context").statusline()
+-- Herdr ▶ ● codex · 3
+```
+
+For lualine:
+
+```lua
+{
+  "nvim-lualine/lualine.nvim",
+  opts = function(_, opts)
+    table.insert(opts.sections.lualine_x, function()
+      return require("herdr-context").statusline()
+    end)
+  end,
+}
+```
+
+The native agent drawer is a scratch-buffer split. Its controls are:
+
+- `<CR>` or `t`: select the pane as the context target;
+- `f`: focus the Herdr pane;
+- `r`: force a state refresh;
+- `q`: close the drawer.
+
+`p` reports that recent-output preview is deferred to v0.2.1; the drawer never reads agent output in
+the background. The `presence.notifications` flags are likewise reserved for the opt-in transition
+notifications planned for v0.2.1.
+
+Advanced consumers can read or subscribe to immutable snapshots:
+
+```lua
+local state = require("herdr-context.state")
+
+state.get()
+state.agents({ scope = "workspace" })
+local subscription = state.subscribe(function(snapshot) end)
+state.unsubscribe(subscription)
+state.refresh({ force = true }, function(snapshot, err) end)
+```
+
+State changes emit `User` events named `HerdrContextUpdated`, `HerdrContextTargetChanged`,
+`HerdrContextAgentStatusChanged`, `HerdrContextConnected`, and `HerdrContextDisconnected`. Relevant
+event details are available through `vim.v.event` and autocmd callback `data`.
+
 ## Target selection
 
-One `herdr api snapshot` call supplies all live agent and layout metadata. Candidates are ranked by:
+The shared snapshot supplies live agent and layout metadata. Candidates are ranked by:
 
 1. same tab;
 2. same workspace;
@@ -140,7 +255,7 @@ One `herdr api snapshot` call supplies all live agent and layout metadata. Candi
 `target_scope` filters that list before ranking. The current Herdr pane is excluded. Pane IDs are used
 internally because labels such as `codex` are not necessarily unique.
 
-The selected pane is checked against a fresh snapshot before every send. If it disappeared, the
+The selected pane is still checked against a fresh snapshot before every send. If it disappeared, the
 selection is cleared and the picker reopens (or the sole remaining candidate is selected when
 `auto_select = true`). `vim.ui.select` drives the picker, so existing Snacks integrations are honored.
 
@@ -206,5 +321,7 @@ make test-live
 ```
 
 The headless suite covers normal and visual ranges, modified and unnamed buffers, Git-relative paths,
-backtick fences, Unicode byte limits, diagnostics, target ranking, stale targets, context-file fallback,
-and proof that default transport does not invoke Enter. Transport tests use a fake Herdr executable.
+backtick fences, Unicode byte limits, diagnostics, target ranking, immutable state, socket framing,
+event debouncing, polling fallback, statusline rendering, drawer mappings, stale targets, context-file
+fallback, and proof that default transport does not invoke Enter. Transport tests use a fake Herdr
+executable; presence tests use sanitized socket fixtures and fake clients.

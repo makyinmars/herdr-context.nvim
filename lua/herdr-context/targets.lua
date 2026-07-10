@@ -2,6 +2,7 @@ local M = {}
 
 local context = require("herdr-context.context")
 local herdr = require("herdr-context.herdr")
+local state = require("herdr-context.state")
 
 local selected
 
@@ -177,6 +178,7 @@ end
 
 function M.clear()
   selected = nil
+  state.set_target(nil)
 end
 
 function M.remember(config, target)
@@ -185,6 +187,7 @@ function M.remember(config, target)
   else
     selected = target
   end
+  state.set_target(target.pane_id)
   if config.remember_target == "workspace" then
     return write_pinned(vim.env.HERDR_WORKSPACE_ID, target.pane_id)
   end
@@ -210,6 +213,7 @@ function M.resolve(config, picker, opts, callback)
     end
     if #candidates == 0 then
       selected = nil
+      state.set_target(nil)
       callback(nil, ("No live Herdr agents found in target scope %q"):format(config.target_scope))
       return
     end
@@ -218,15 +222,18 @@ function M.resolve(config, picker, opts, callback)
       local remembered = find(candidates, selected and selected.pane_id)
       if remembered then
         selected = remembered
+        state.set_target(remembered.pane_id)
         callback(remembered)
         return
       elseif selected then
         selected = nil
+        state.set_target(nil)
       end
 
       local pinned = find(candidates, read_pinned(vim.env.HERDR_WORKSPACE_ID))
       if pinned then
         selected = pinned
+        state.set_target(pinned.pane_id)
         callback(pinned)
         return
       end
