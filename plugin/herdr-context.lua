@@ -37,6 +37,10 @@ vim.api.nvim_create_user_command("HerdrContextQuickfix", function()
   require("herdr-context").quickfix()
 end, { desc = "Stage the current quickfix list in a Herdr agent prompt" })
 
+vim.api.nvim_create_user_command("HerdrContextLocationList", function()
+  require("herdr-context").location_list()
+end, { desc = "Stage the current location list in a Herdr agent prompt" })
+
 vim.api.nvim_create_user_command("HerdrContextTarget", function()
   require("herdr-context").select_target()
 end, { desc = "Select the destination Herdr agent" })

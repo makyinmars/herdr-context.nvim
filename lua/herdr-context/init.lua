@@ -73,6 +73,7 @@ end
 function M.setup(opts)
   local cfg = config.setup(opts)
   require("herdr-context.ui.statusline").setup()
+  require("herdr-context.notifications").setup()
   watch.start(cfg)
   return cfg
 end

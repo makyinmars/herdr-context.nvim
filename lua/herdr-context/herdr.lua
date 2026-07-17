@@ -125,6 +125,23 @@ function M.get_agent(config, target, callback)
   return unwrap(json_command(config, { "agent", "get", target }))
 end
 
+function M.read_agent(config, pane_id, opts, callback)
+  opts = opts or {}
+  local source = opts.source or "recent-unwrapped"
+  local lines = opts.lines or 80
+  return M.run(config, {
+    "agent",
+    "read",
+    pane_id,
+    "--source",
+    source,
+    "--lines",
+    tostring(lines),
+    "--format",
+    "text",
+  }, callback)
+end
+
 function M.send(config, pane_id, text, callback)
   return M.run(config, { "agent", "send", pane_id, text }, callback)
 end

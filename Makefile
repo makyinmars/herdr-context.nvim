@@ -1,7 +1,12 @@
-.PHONY: test test-live lint
+.PHONY: test test-lua test-scripts test-live lint
 
-test:
+test: test-lua test-scripts
+
+test-lua:
 	XDG_STATE_HOME=/tmp/herdr-context-nvim-state nvim --headless -u tests/minimal_init.lua -l tests/run.lua
+
+test-scripts:
+	bash tests/scripts.sh
 
 test-live:
 	HERDR_LIVE_TEST=1 XDG_STATE_HOME=/tmp/herdr-context-nvim-state nvim --headless -u tests/minimal_init.lua -l tests/live.lua

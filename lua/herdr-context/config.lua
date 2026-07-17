@@ -60,6 +60,7 @@ local defaults = {
   agents_view = {
     position = "right",
     width = 44,
+    preview_lines = 80,
     show_cwd = true,
     show_workspace = true,
     show_tab = true,
@@ -116,6 +117,7 @@ local function validate(opts)
     ["presence.notifications.blocked"] = { opts.presence.notifications.blocked, "boolean" },
     ["agents_view.position"] = { opts.agents_view.position, "string" },
     ["agents_view.width"] = { opts.agents_view.width, "number" },
+    ["agents_view.preview_lines"] = { opts.agents_view.preview_lines, "number" },
     ["agents_view.show_cwd"] = { opts.agents_view.show_cwd, "boolean" },
     ["agents_view.show_workspace"] = { opts.agents_view.show_workspace, "boolean" },
     ["agents_view.show_tab"] = { opts.agents_view.show_tab, "boolean" },
@@ -187,6 +189,9 @@ local function validate(opts)
   end
   if opts.agents_view.width < 20 or opts.agents_view.width % 1 ~= 0 then
     error("herdr-context: agents_view.width must be an integer of at least 20")
+  end
+  if opts.agents_view.preview_lines <= 0 or opts.agents_view.preview_lines % 1 ~= 0 then
+    error("herdr-context: agents_view.preview_lines must be a positive integer")
   end
   for name, icon in pairs(opts.statusline.icons) do
     if type(icon) ~= "string" then

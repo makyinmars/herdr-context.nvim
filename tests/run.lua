@@ -397,6 +397,34 @@ test("reports a missing Herdr executable instead of throwing", function()
   contains(err, "Could not start Herdr")
 end)
 
+test("reads recent agent output with bounded text arguments", function()
+  local seen
+  local original_run = herdr.run
+  herdr.run = function(_, args, callback)
+    seen = args
+    callback("first line\nsecond line\n", nil)
+    return { kill = function() end }
+  end
+  local output
+  herdr.read_agent({}, "w0:p9", { source = "recent-unwrapped", lines = 25 }, function(value, err)
+    truthy(value, err)
+    output = value
+  end)
+  herdr.run = original_run
+  eq("first line\nsecond line\n", output)
+  eq({
+    "agent",
+    "read",
+    "w0:p9",
+    "--source",
+    "recent-unwrapped",
+    "--lines",
+    "25",
+    "--format",
+    "text",
+  }, seen)
+end)
+
 test("normalizes state and returns immutable public snapshots", function()
   state._reset()
   state._replace({
@@ -529,6 +557,52 @@ test("emits status and target User events with event data", function()
   eq("polling", disconnected_event.mode)
   eq(true, disconnected_event.stale)
   vim.api.nvim_del_augroup_by_id(group)
+end)
+
+test("sends only opted-in agent status notifications", function()
+  local notifications = require("herdr-context.notifications")
+  state._reset()
+  config.setup({
+    presence = {
+      enabled = true,
+      notifications = { idle = true, blocked = false },
+    },
+  })
+  notifications.setup()
+  local messages = {}
+  local original_notify = vim.notify
+  vim.notify = function(message, level)
+    messages[#messages + 1] = { message = message, level = level }
+  end
+  local raw = {
+    agents = { { pane_id = "w0:p1", agent = "codex", agent_status = "working" } },
+  }
+  state._replace(raw, { connected = true, mode = "socket" })
+  eq(0, #messages, "initial snapshot must not notify")
+  raw.agents[1].agent_status = "idle"
+  state._replace(raw, { connected = true, mode = "socket" })
+  raw.agents[1].agent_status = "blocked"
+  state._replace(raw, { connected = true, mode = "socket" })
+  eq(1, #messages)
+  contains(messages[1].message, "Herdr codex (w0:p1) is idle")
+  eq(vim.log.levels.INFO, messages[1].level)
+
+  config.setup({
+    presence = {
+      enabled = true,
+      notifications = { idle = false, blocked = true },
+    },
+  })
+  notifications.setup()
+  raw.agents[1].agent_status = "working"
+  state._replace(raw, { connected = true, mode = "socket" })
+  raw.agents[1].agent_status = "blocked"
+  state._replace(raw, { connected = true, mode = "socket" })
+  vim.notify = original_notify
+  notifications.stop()
+  eq(2, #messages)
+  contains(messages[2].message, "Herdr codex (w0:p1) is blocked")
+  eq(vim.log.levels.WARN, messages[2].level)
 end)
 
 test("decodes fragmented and batched socket messages", function()
@@ -871,6 +945,24 @@ test("renders the drawer with stable pane mappings and actions", function()
   herdr.focus = original_focus
   eq("w0:p2", focused)
 
+  local read_request
+  local original_read_agent = herdr.read_agent
+  herdr.read_agent = function(_, pane_id, opts, callback)
+    read_request = { pane_id = pane_id, opts = opts }
+    callback("build passed\nready", nil)
+    return { kill = function() end }
+  end
+  drawer.preview()
+  herdr.read_agent = original_read_agent
+  local preview = require("herdr-context.ui.preview")
+  local active_preview = preview._active()
+  truthy(active_preview)
+  eq("w0:p2", read_request.pane_id)
+  eq("recent-unwrapped", read_request.opts.source)
+  eq(80, read_request.opts.lines)
+  eq({ "build passed", "ready" }, vim.api.nvim_buf_get_lines(active_preview.bufnr, 0, -1, false))
+  preview.close()
+
   raw.agents[1].agent_status = "idle"
   raw.agents[#raw.agents + 1] = {
     pane_id = "w0:p0",
@@ -899,6 +991,33 @@ test("renders the drawer with stable pane mappings and actions", function()
   vim.env.HERDR_PANE_ID = old_env.HERDR_PANE_ID
   vim.env.HERDR_WORKSPACE_ID = old_env.HERDR_WORKSPACE_ID
   vim.env.HERDR_TAB_ID = old_env.HERDR_TAB_ID
+end)
+
+test("cancels superseded output previews and ignores stale callbacks", function()
+  config.setup({ agents_view = { preview_lines = 12 } })
+  local preview = require("herdr-context.ui.preview")
+  local callbacks = {}
+  local killed = {}
+  local original_read_agent = herdr.read_agent
+  herdr.read_agent = function(_, pane_id, opts, callback)
+    callbacks[pane_id] = callback
+    eq(12, opts.lines)
+    return {
+      kill = function(_, signal)
+        killed[pane_id] = signal
+      end,
+    }
+  end
+
+  preview.open({ pane_id = "w0:p1", agent = "codex" })
+  preview.open({ pane_id = "w0:p2", agent = "claude" })
+  eq(15, killed["w0:p1"])
+  callbacks["w0:p1"]("stale output", nil)
+  callbacks["w0:p2"]("fresh output", nil)
+  local active_preview = preview._active()
+  eq({ "fresh output" }, vim.api.nvim_buf_get_lines(active_preview.bufnr, 0, -1, false))
+  preview.close()
+  herdr.read_agent = original_read_agent
 end)
 
 test("builds deterministic exact bundles with safe fences and deduplication", function()
@@ -1280,6 +1399,7 @@ test("registers all user commands", function()
     "HerdrContextSymbol",
     "HerdrContextHunk",
     "HerdrContextQuickfix",
+    "HerdrContextLocationList",
     "HerdrContextTarget",
     "HerdrContextAgents",
     "HerdrContextRefresh",

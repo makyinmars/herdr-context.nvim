@@ -225,6 +225,14 @@ function M.focus()
   end)
 end
 
+function M.preview()
+  local agent = selected_agent()
+  if not agent then
+    return
+  end
+  require("herdr-context.ui.preview").open(agent)
+end
+
 function M.refresh()
   state.refresh({ force = true }, function(_, err)
     if err then
@@ -234,6 +242,7 @@ function M.refresh()
 end
 
 local function cleanup()
+  require("herdr-context.ui.preview").close()
   if subscriber then
     state.unsubscribe(subscriber)
     subscriber = nil
@@ -286,9 +295,7 @@ function M.open()
   map("<CR>", M.select_target, "Select Herdr target")
   map("t", M.select_target, "Select Herdr target")
   map("f", M.focus, "Focus Herdr pane")
-  map("p", function()
-    notify("Agent output preview is planned for herdr-context.nvim v0.2.1")
-  end, "Preview Herdr output")
+  map("p", M.preview, "Preview Herdr output")
 
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = bufnr,

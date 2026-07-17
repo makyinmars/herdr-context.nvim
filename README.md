@@ -116,6 +116,7 @@ herdr plugin link /path/to/herdr-context.nvim
 | `:HerdrContextSymbol` | Stage the innermost symbol under the cursor |
 | `:HerdrContextHunk` | Stage the Git hunk under the cursor |
 | `:HerdrContextQuickfix` | Stage the current quickfix list |
+| `:HerdrContextLocationList` | Stage the current window's location list |
 | `:HerdrContextTarget` | Choose or change the destination agent |
 | `:HerdrContextAgents` | Toggle the live agent drawer |
 | `:HerdrContextRefresh` | Force a cached-state refresh |
@@ -183,6 +184,7 @@ require("herdr-context").setup({
   agents_view = {
     position = "right", -- "left" or "right"
     width = 44,
+    preview_lines = 80,
     show_cwd = true,
     show_workspace = true,
     show_tab = true,
@@ -319,12 +321,16 @@ The native agent drawer is a scratch-buffer split. Its controls are:
 
 - `<CR>` or `t`: select the pane as the context target;
 - `f`: focus the Herdr pane;
+- `p`: preview the agent's recent output;
 - `r`: force a state refresh;
 - `q`: close the drawer.
 
-`p` reports that recent-output preview is deferred to v0.2.1; the drawer never reads agent output in
-the background. The `presence.notifications` flags are likewise reserved for the opt-in transition
-notifications planned for v0.2.1.
+Output is read only when `p` is pressed, using `herdr agent read --source recent-unwrapped`; the drawer
+never reads agent output in the background. `agents_view.preview_lines` bounds the requested history.
+
+The `presence.notifications` flags opt into desktop-visible Neovim notifications when an existing
+agent transitions to `idle` or `blocked`. Initial snapshots do not notify, and both transitions are
+disabled by default.
 
 Advanced consumers can read or subscribe to immutable snapshots:
 
@@ -419,7 +425,8 @@ make lint
 make test-live
 ```
 
-The headless suite also covers deterministic bundles, provider timeout and cancellation, LSP symbol
+The test suite also covers deterministic bundles, provider timeout and cancellation, LSP symbol
 fixtures, MiniDiff add/change/delete hunks, Git diff parsing, quickfix normalization, stale composer
 buffers, exact preview rendering, and combined byte budgets. Transport tests use a fake Herdr
-executable; presence tests use sanitized socket fixtures and fake clients.
+executable; presence tests use sanitized socket fixtures and fake clients. Shell smoke tests exercise
+the companion overlay launcher, target ranking, and workspace target persistence.

@@ -28,6 +28,8 @@ if candidates[1] then
   local agent, get_err = herdr.get_agent(config, candidates[1].pane_id)
   assert(agent, get_err)
   assert(agent.pane_id == candidates[1].pane_id, "agent.get returned a different pane")
+  local output, read_err = herdr.read_agent(config, candidates[1].pane_id, { lines = 5 })
+  assert(type(output) == "string", read_err or "agent.read did not return text")
 end
 
 print(

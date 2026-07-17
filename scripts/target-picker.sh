@@ -84,4 +84,4 @@ mv "$tmp" "$config_file"
 trap - EXIT
 
 printf '\nPinned %s for workspace %s.\n' "$selected" "$workspace_id"
-sleep 1
+sleep "${HERDR_CONTEXT_CLOSE_DELAY:-1}"
