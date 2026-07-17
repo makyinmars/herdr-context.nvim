@@ -16,8 +16,9 @@ local defaults = {
   context_file_dir = nil,
   composer = {
     layout = "float",
-    width = 0.85,
+    width = 0.92,
     height = 0.8,
+    checklist_width = 0.38,
     provider_timeout_ms = 1500,
     hunk_context_lines = 3,
     preview = true,
@@ -30,6 +31,28 @@ local defaults = {
       location_list = false,
       trouble = false,
     },
+    presets = {
+      debug = { "selection", "symbol", "hunk", "diagnostics" },
+      review = { "hunk", "diagnostics", "quickfix", "trouble" },
+      explain = { "selection", "symbol", "diagnostics" },
+    },
+  },
+  safety = {
+    enabled = true,
+    confirm_warnings = true,
+    exclude_patterns = { ".env", ".env.*", "*.pem", "*.key", "credentials*", "secrets*" },
+    secret_patterns = {
+      "AKIA[%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d]",
+      "-----BEGIN .-PRIVATE KEY-----",
+      "api[_-]key%s*[:=]%s*%S+",
+      "token%s*[:=]%s*%S+",
+      "secret%s*[:=]%s*%S+",
+      "password%s*[:=]%s*%S+",
+    },
+  },
+  history = {
+    enabled = true,
+    max_entries = 20,
   },
   providers = {
     symbol = {
@@ -61,6 +84,9 @@ local defaults = {
     position = "right",
     width = 44,
     preview_lines = 80,
+    group_by = "workspace",
+    side_preview = true,
+    preview_width = 64,
     show_cwd = true,
     show_workspace = true,
     show_tab = true,
@@ -103,6 +129,8 @@ local function validate(opts)
     multiline_strategy = { opts.multiline_strategy, "string" },
     bracketed_paste_agents = { opts.bracketed_paste_agents, "table" },
     composer = { opts.composer, "table" },
+    safety = { opts.safety, "table" },
+    history = { opts.history, "table" },
     providers = { opts.providers, "table" },
     presence = { opts.presence, "table" },
     agents_view = { opts.agents_view, "table" },
@@ -118,6 +146,9 @@ local function validate(opts)
     ["agents_view.position"] = { opts.agents_view.position, "string" },
     ["agents_view.width"] = { opts.agents_view.width, "number" },
     ["agents_view.preview_lines"] = { opts.agents_view.preview_lines, "number" },
+    ["agents_view.group_by"] = { opts.agents_view.group_by, "string" },
+    ["agents_view.side_preview"] = { opts.agents_view.side_preview, "boolean" },
+    ["agents_view.preview_width"] = { opts.agents_view.preview_width, "number" },
     ["agents_view.show_cwd"] = { opts.agents_view.show_cwd, "boolean" },
     ["agents_view.show_workspace"] = { opts.agents_view.show_workspace, "boolean" },
     ["agents_view.show_tab"] = { opts.agents_view.show_tab, "boolean" },
@@ -129,10 +160,18 @@ local function validate(opts)
     ["composer.layout"] = { opts.composer.layout, "string" },
     ["composer.width"] = { opts.composer.width, "number" },
     ["composer.height"] = { opts.composer.height, "number" },
+    ["composer.checklist_width"] = { opts.composer.checklist_width, "number" },
     ["composer.provider_timeout_ms"] = { opts.composer.provider_timeout_ms, "number" },
     ["composer.hunk_context_lines"] = { opts.composer.hunk_context_lines, "number" },
     ["composer.preview"] = { opts.composer.preview, "boolean" },
     ["composer.defaults"] = { opts.composer.defaults, "table" },
+    ["composer.presets"] = { opts.composer.presets, "table" },
+    ["safety.enabled"] = { opts.safety.enabled, "boolean" },
+    ["safety.confirm_warnings"] = { opts.safety.confirm_warnings, "boolean" },
+    ["safety.exclude_patterns"] = { opts.safety.exclude_patterns, "table" },
+    ["safety.secret_patterns"] = { opts.safety.secret_patterns, "table" },
+    ["history.enabled"] = { opts.history.enabled, "boolean" },
+    ["history.max_entries"] = { opts.history.max_entries, "number" },
     ["providers.symbol"] = { opts.providers.symbol, "table" },
     ["providers.symbol.enabled"] = { opts.providers.symbol.enabled, "boolean" },
     ["providers.symbol.lsp"] = { opts.providers.symbol.lsp, "boolean" },
@@ -153,6 +192,7 @@ local function validate(opts)
   validate_choice("remember_target", opts.remember_target, { "none", "session", "workspace" })
   validate_choice("multiline_strategy", opts.multiline_strategy, { "auto", "bracketed_paste", "context_file" })
   validate_choice("agents_view.position", opts.agents_view.position, { "left", "right" })
+  validate_choice("agents_view.group_by", opts.agents_view.group_by, { "none", "workspace", "tab" })
   validate_choice("composer.layout", opts.composer.layout, { "float" })
 
   for _, key in ipairs({ "width", "height" }) do
@@ -160,6 +200,9 @@ local function validate(opts)
     if value <= 0 then
       error("herdr-context: composer." .. key .. " must be greater than zero")
     end
+  end
+  if opts.composer.checklist_width <= 0 or opts.composer.checklist_width >= 1 then
+    error("herdr-context: composer.checklist_width must be between zero and one")
   end
   if opts.composer.provider_timeout_ms <= 0 or opts.composer.provider_timeout_ms % 1 ~= 0 then
     error("herdr-context: composer.provider_timeout_ms must be a positive integer")
@@ -171,6 +214,26 @@ local function validate(opts)
     if type(value) ~= "boolean" then
       error("herdr-context: composer.defaults." .. tostring(name) .. " must be a boolean")
     end
+  end
+  for name, preset in pairs(opts.composer.presets) do
+    if type(name) ~= "string" or name == "" or type(preset) ~= "table" then
+      error("herdr-context: composer.presets must map non-empty names to provider lists")
+    end
+    for _, id in ipairs(preset) do
+      if type(id) ~= "string" or id == "" then
+        error("herdr-context: composer preset entries must be non-empty provider ids")
+      end
+    end
+  end
+  for _, key in ipairs({ "exclude_patterns", "secret_patterns" }) do
+    for _, pattern in ipairs(opts.safety[key]) do
+      if type(pattern) ~= "string" or pattern == "" then
+        error("herdr-context: safety." .. key .. " entries must be non-empty strings")
+      end
+    end
+  end
+  if opts.history.max_entries <= 0 or opts.history.max_entries % 1 ~= 0 then
+    error("herdr-context: history.max_entries must be a positive integer")
   end
   for _, backend in ipairs(opts.providers.hunk.backends) do
     validate_choice("providers.hunk.backends", backend, { "mini_diff", "git" })
@@ -192,6 +255,9 @@ local function validate(opts)
   end
   if opts.agents_view.preview_lines <= 0 or opts.agents_view.preview_lines % 1 ~= 0 then
     error("herdr-context: agents_view.preview_lines must be a positive integer")
+  end
+  if opts.agents_view.preview_width < 20 or opts.agents_view.preview_width % 1 ~= 0 then
+    error("herdr-context: agents_view.preview_width must be an integer of at least 20")
   end
   for name, icon in pairs(opts.statusline.icons) do
     if type(icon) ~= "string" then

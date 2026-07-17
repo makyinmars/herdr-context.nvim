@@ -112,13 +112,14 @@ herdr plugin link /path/to/herdr-context.nvim
 | `:HerdrContextReference` | Stage `@path#L10-L20` |
 | `:HerdrContextSend` | Stage the reference and selected code |
 | `:HerdrContextDiagnostics` | Stage diagnostics for the current line or selection |
-| `:HerdrContextCompose` | Collect, preview, and stage a combined context bundle |
+| `:HerdrContextCompose [preset]` | Collect, preview, and stage a combined context bundle |
 | `:HerdrContextSymbol` | Stage the innermost symbol under the cursor |
 | `:HerdrContextHunk` | Stage the Git hunk under the cursor |
 | `:HerdrContextQuickfix` | Stage the current quickfix list |
 | `:HerdrContextLocationList` | Stage the current window's location list |
 | `:HerdrContextTarget` | Choose or change the destination agent |
 | `:HerdrContextAgents` | Toggle the live agent drawer |
+| `:HerdrContextHistory` | Inspect, clear, or restage session history |
 | `:HerdrContextRefresh` | Force a cached-state refresh |
 | `:checkhealth herdr-context` | Check Neovim, environment, Herdr, agents, and the companion plugin |
 
@@ -137,8 +138,9 @@ require("herdr-context").setup({
 
   composer = {
     layout = "float",
-    width = 0.85,
+    width = 0.92,
     height = 0.8,
+    checklist_width = 0.38,
     provider_timeout_ms = 1500,
     hunk_context_lines = 3,
     preview = true,
@@ -151,6 +153,30 @@ require("herdr-context").setup({
       location_list = false,
       trouble = false,
     },
+    presets = {
+      debug = { "selection", "symbol", "hunk", "diagnostics" },
+      review = { "hunk", "diagnostics", "quickfix", "trouble" },
+      explain = { "selection", "symbol", "diagnostics" },
+    },
+  },
+
+  safety = {
+    enabled = true,
+    confirm_warnings = true,
+    exclude_patterns = { ".env", ".env.*", "*.pem", "*.key", "credentials*", "secrets*" },
+    secret_patterns = { -- Lua patterns
+      "AKIA[%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d][%u%d]",
+      "-----BEGIN .-PRIVATE KEY-----",
+      "api[_-]key%s*[:=]%s*%S+",
+      "token%s*[:=]%s*%S+",
+      "secret%s*[:=]%s*%S+",
+      "password%s*[:=]%s*%S+",
+    },
+  },
+
+  history = {
+    enabled = true,
+    max_entries = 20,
   },
 
   providers = {
@@ -185,6 +211,9 @@ require("herdr-context").setup({
     position = "right", -- "left" or "right"
     width = 44,
     preview_lines = 80,
+    group_by = "workspace", -- "none", "workspace", or "tab"
+    side_preview = true,
+    preview_width = 64,
     show_cwd = true,
     show_workspace = true,
     show_tab = true,
@@ -237,9 +266,10 @@ or newly introduced agent families remain on the conservative context-file path 
 
 ## Context composer
 
-The composer freezes the source buffer, cursor, selection, changedtick, path, and working directory
+The two-pane composer freezes the source buffer, cursor, selection, changedtick, path, and working directory
 before providers begin. Providers collect independently, and one timeout or failure does not block the
-others. The checklist shows provider status and byte size while the lower pane contains the exact
+others. The left checklist shows provider status, target, preset, instruction, warnings, and byte size;
+the right pane contains the exact
 Markdown payload that will be staged.
 
 Normal mode selects the innermost symbol, the hunk under the cursor, and diagnostics scoped to the
@@ -250,11 +280,21 @@ Quickfix, location-list, and Trouble sources are deliberately opt-in defaults.
 Composer controls are:
 
 - `<Space>`: toggle the provider under the cursor;
+- `i`: add or edit the instruction included at the top of the bundle;
+- `P`: apply a named provider preset;
 - `t`: choose a target and return to the composer;
 - `r`: recapture the source and rerun providers;
 - `s`: stage the exact preview (or stage and submit when `submit = true`);
 - `p`: toggle the full payload preview;
+- `h`: inspect the session staging history;
+- `<Tab>`: switch between checklist and preview panes;
+- `?`: show the key reference;
 - `q` or `<Esc>`: cancel.
+
+Presets can also be selected directly with commands such as `:HerdrContextCompose debug`. Only available
+providers are selected. `i` opens a multiline Markdown instruction editor; save it with `<C-s>` or cancel
+with `q` from Normal mode. Instructions are rendered as a deterministic `## Instructions` section and
+are included in the same byte budget and exact-preview path as provider content.
 
 Editing the source buffer marks the preview stale and disables staging until it is refreshed. The
 combined final payload—including headings and Markdown fences—is rejected when it exceeds
@@ -322,11 +362,16 @@ The native agent drawer is a scratch-buffer split. Its controls are:
 - `<CR>` or `t`: select the pane as the context target;
 - `f`: focus the Herdr pane;
 - `p`: preview the agent's recent output;
+- `/`: filter agents by name, status, workspace, tab, path, or message;
+- `<Space>`: collapse or expand the workspace/tab group under the cursor;
+- `c`: clear the active filter;
 - `r`: force a state refresh;
 - `q`: close the drawer.
 
-Output is read only when `p` is pressed, using `herdr agent read --source recent-unwrapped`; the drawer
-never reads agent output in the background. `agents_view.preview_lines` bounds the requested history.
+Agents are grouped by workspace and tab by default. Output is read only when `p` is pressed, using
+`herdr agent read --source recent-unwrapped`; the drawer never reads agent output in the background.
+The adjacent preview uses `agents_view.preview_width`, while `agents_view.preview_lines` bounds the
+requested history. Press `r` inside the output pane to refresh it.
 
 The `presence.notifications` flags opt into desktop-visible Neovim notifications when an existing
 agent transitions to `idle` or `blocked`. Initial snapshots do not notify, and both transitions are
@@ -405,6 +450,18 @@ Diagnostics for @src/index.ts#L18-L27:
 ```
 
 ## Safety contract
+
+Safety exclusions are applied before bundle construction. Current-buffer sections matching
+`safety.exclude_patterns` are blocked, while matching items in list providers are removed and reported.
+Selected content is also checked against `safety.secret_patterns`. The composer shows warnings and
+requires a second `s` press after review; direct staging commands use an explicit confirmation picker.
+Changing the payload invalidates an earlier confirmation. Safety checks never print the matched secret.
+
+Successful stages are retained in memory up to `history.max_entries`. `:HerdrContextHistory` can inspect
+the exact payload, clear the list, or restage an entry. History is never written to disk and disappears
+when Neovim exits.
+
+The transport safety guarantees remain:
 
 Default sends never submit:
 

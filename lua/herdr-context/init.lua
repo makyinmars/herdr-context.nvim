@@ -4,6 +4,7 @@ local config = require("herdr-context.config")
 local context = require("herdr-context.context")
 local format = require("herdr-context.format")
 local picker = require("herdr-context.picker")
+local safety = require("herdr-context.safety")
 local state = require("herdr-context.state")
 local targets = require("herdr-context.targets")
 local transport = require("herdr-context.transport")
@@ -26,6 +27,14 @@ local function stage(kind, opts)
   local cfg = config.get()
   local captured = capture(opts)
   if not captured then
+    return
+  end
+  local excluded, pattern = safety.excluded_path(captured.relative_path, cfg.safety)
+  if excluded then
+    notify(
+      ("Refusing to stage %s because it matches safety exclusion %q"):format(captured.relative_path, pattern),
+      vim.log.levels.ERROR
+    )
     return
   end
 
@@ -51,21 +60,35 @@ local function stage(kind, opts)
     return
   end
 
-  targets.resolve(cfg, picker, {}, function(target, target_err)
-    if not target then
-      if target_err ~= "Target selection cancelled" then
-        notify(target_err, vim.log.levels.ERROR)
-      end
+  local warnings = safety.scan({ { title = "Context", content = payload } }, cfg.safety)
+  safety.confirm(warnings, function(confirmed)
+    if not confirmed then
       return
     end
-
-    transport.stage(cfg, target, payload, function(ok, transport_err, result)
-      if not ok then
-        notify(transport_err, vim.log.levels.ERROR)
+    targets.resolve(cfg, picker, {}, function(target, target_err)
+      if not target then
+        if target_err ~= "Target selection cancelled" then
+          notify(target_err, vim.log.levels.ERROR)
+        end
         return
       end
-      local suffix = result.mode == "context_file" and " via a temporary context file" or ""
-      notify(("Staged context for %s (%s)%s"):format(target.agent or "agent", target.pane_id, suffix))
+
+      transport.stage(cfg, target, payload, function(ok, transport_err, result)
+        if not ok then
+          notify(transport_err, vim.log.levels.ERROR)
+          return
+        end
+        local suffix = result.mode == "context_file" and " via a temporary context file" or ""
+        require("herdr-context.history").record({
+          kind = kind,
+          target = target,
+          payload = payload,
+          bytes = #payload,
+          providers = {},
+          mode = result.mode,
+        })
+        notify(("Staged context for %s (%s)%s"):format(target.agent or "agent", target.pane_id, suffix))
+      end)
     end)
   end)
 end
@@ -133,6 +156,10 @@ end
 
 function M.agents()
   require("herdr-context.ui.agents").toggle()
+end
+
+function M.history()
+  return require("herdr-context.ui.history").toggle()
 end
 
 function M.refresh(callback)

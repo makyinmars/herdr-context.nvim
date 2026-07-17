@@ -2,6 +2,15 @@
 
 All notable changes to `herdr-context.nvim` are documented here.
 
+## 0.4.0 - 2026-07-16
+
+- Replace the composer with paired provider-checklist and exact-payload panes.
+- Add editable instructions and named composer presets, including command completion.
+- Group, filter, and collapse agents in the drawer and show recent output in an adjacent pane.
+- Add configurable sensitive-path exclusions and secret-pattern confirmations.
+- Add bounded, in-memory staging history with payload inspection and restaging.
+- Add `:HerdrContextHistory` and expand UI, safety, preset, and history coverage.
+
 ## 0.3.0 - 2026-07-16
 
 - Add the context composer with selection, symbol, hunk, diagnostics, quickfix, location-list, and Trouble providers.

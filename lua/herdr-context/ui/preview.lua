@@ -42,30 +42,45 @@ function M.close()
   else
     cleanup(preview)
   end
+  local source_winid = preview.opts and preview.opts.source_winid
+  if source_winid and vim.api.nvim_win_is_valid(source_winid) then
+    vim.api.nvim_set_current_win(source_winid)
+  end
 end
 
-function M.open(agent)
+function M.open(agent, opts)
+  opts = opts or {}
   M.close()
   generation = generation + 1
   local request_generation = generation
-  local max_width = math.max(1, vim.o.columns - 4)
-  local max_height = math.max(1, vim.o.lines - vim.o.cmdheight - 4)
-  local width = math.min(math.max(40, math.floor(vim.o.columns * 0.75)), max_width)
-  local height = math.min(math.max(8, math.floor((vim.o.lines - vim.o.cmdheight) * 0.7)), max_height)
   local bufnr = vim.api.nvim_create_buf(false, true)
   local label = agent.display_agent or agent.agent or "agent"
-  local winid = vim.api.nvim_open_win(bufnr, true, {
-    relative = "editor",
-    style = "minimal",
-    border = "rounded",
-    width = width,
-    height = height,
-    row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
-    col = math.max(0, math.floor((vim.o.columns - width) / 2)),
-    title = (" %s · recent output "):format(label),
-    title_pos = "center",
-  })
-  local preview = { bufnr = bufnr, winid = winid, pane_id = agent.pane_id }
+  local winid
+  if opts.side and opts.source_winid and vim.api.nvim_win_is_valid(opts.source_winid) then
+    vim.api.nvim_set_current_win(opts.source_winid)
+    vim.cmd(opts.position == "left" and "rightbelow vsplit" or "leftabove vsplit")
+    winid = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(winid, bufnr)
+    vim.api.nvim_win_set_width(winid, config.get().agents_view.preview_width)
+    vim.wo[winid].winbar = ("%%#Title# %s · recent output "):format(label)
+  else
+    local max_width = math.max(1, vim.o.columns - 4)
+    local max_height = math.max(1, vim.o.lines - vim.o.cmdheight - 4)
+    local width = math.min(math.max(40, math.floor(vim.o.columns * 0.75)), max_width)
+    local height = math.min(math.max(8, math.floor((vim.o.lines - vim.o.cmdheight) * 0.7)), max_height)
+    winid = vim.api.nvim_open_win(bufnr, true, {
+      relative = "editor",
+      style = "minimal",
+      border = "rounded",
+      width = width,
+      height = height,
+      row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
+      col = math.max(0, math.floor((vim.o.columns - width) / 2)),
+      title = (" %s · recent output "):format(label),
+      title_pos = "center",
+    })
+  end
+  local preview = { bufnr = bufnr, winid = winid, pane_id = agent.pane_id, agent = agent, opts = opts }
   active = preview
 
   vim.bo[bufnr].buftype = "nofile"
@@ -85,6 +100,9 @@ function M.open(agent)
   for _, key in ipairs({ "q", "<Esc>", "p" }) do
     vim.keymap.set("n", key, close, { buffer = bufnr, silent = true, nowait = true, desc = "Close Herdr output" })
   end
+  vim.keymap.set("n", "r", function()
+    M.open(agent, opts)
+  end, { buffer = bufnr, silent = true, nowait = true, desc = "Refresh Herdr output" })
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = bufnr,
     once = true,

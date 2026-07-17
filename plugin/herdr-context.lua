@@ -22,8 +22,19 @@ vim.api.nvim_create_user_command("HerdrContextDiagnostics", function(args)
 end, { desc = "Stage diagnostics for a line or range in a Herdr agent prompt", range = true })
 
 vim.api.nvim_create_user_command("HerdrContextCompose", function(args)
-  require("herdr-context").compose(command_opts(args))
-end, { desc = "Compose and preview context for a Herdr agent", range = true })
+  local opts = command_opts(args) or {}
+  opts.preset = args.args ~= "" and args.args or nil
+  require("herdr-context").compose(opts)
+end, {
+  desc = "Compose and preview context for a Herdr agent",
+  range = true,
+  nargs = "?",
+  complete = function()
+    local names = vim.tbl_keys(require("herdr-context.config").get().composer.presets)
+    table.sort(names)
+    return names
+  end,
+})
 
 vim.api.nvim_create_user_command("HerdrContextSymbol", function()
   require("herdr-context").symbol()
@@ -48,6 +59,10 @@ end, { desc = "Select the destination Herdr agent" })
 vim.api.nvim_create_user_command("HerdrContextAgents", function()
   require("herdr-context").agents()
 end, { desc = "Toggle the live Herdr agent drawer" })
+
+vim.api.nvim_create_user_command("HerdrContextHistory", function()
+  require("herdr-context").history()
+end, { desc = "Toggle staged Herdr context history" })
 
 vim.api.nvim_create_user_command("HerdrContextRefresh", function()
   require("herdr-context").refresh()

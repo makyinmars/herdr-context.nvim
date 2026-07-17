@@ -923,6 +923,9 @@ test("renders the drawer with stable pane mappings and actions", function()
   eq("nofile", vim.bo[drawer_buf].buftype)
   eq("wipe", vim.bo[drawer_buf].bufhidden)
   eq("herdr-context-agents", vim.bo[drawer_buf].filetype)
+  local drawer_text = table.concat(vim.api.nvim_buf_get_lines(drawer_buf, 0, -1, false), "\n")
+  contains(drawer_text, "project / api")
+  contains(drawer_text, "project / web")
   local mapping = drawer._line_to_pane()
   local p2_line
   for line, pane_id in pairs(mapping) do
@@ -962,6 +965,20 @@ test("renders the drawer with stable pane mappings and actions", function()
   eq(80, read_request.opts.lines)
   eq({ "build passed", "ready" }, vim.api.nvim_buf_get_lines(active_preview.bufnr, 0, -1, false))
   preview.close()
+
+  local original_input = vim.ui.input
+  vim.ui.input = function(_, callback)
+    callback("claude")
+  end
+  drawer.filter()
+  eq("claude", drawer._filter())
+  local filtered = vim.tbl_values(drawer._line_to_pane())
+  eq({ "w0:p2" }, filtered)
+  vim.ui.input = function(_, callback)
+    callback("")
+  end
+  drawer.filter()
+  vim.ui.input = original_input
 
   raw.agents[1].agent_status = "idle"
   raw.agents[#raw.agents + 1] = {
@@ -1063,6 +1080,61 @@ test("builds deterministic exact bundles with safe fences and deduplication", fu
   local oversized = bundle.build(built.sections, 8)
   eq(true, oversized.oversized)
   contains(oversized.error, tostring(oversized.bytes))
+end)
+
+test("excludes sensitive paths and detects secret-like content", function()
+  local safety = require("herdr-context.safety")
+  config.setup({})
+  local excluded, pattern = safety.excluded_path("config/.env")
+  eq(true, excluded)
+  eq(".env", pattern)
+  local section, reason = safety.sanitize({
+    id = "selection",
+    title = "Environment",
+    format = "code",
+    content = "PASSWORD=hunter2",
+    reference = "@config/.env#L1",
+    fingerprint = "env",
+  }, {})
+  eq(nil, section)
+  contains(reason, "Excluded config/.env")
+  local warnings = safety.scan({
+    {
+      id = "instructions",
+      title = "Instructions",
+      format = "text",
+      content = "password = hunter2",
+    },
+  })
+  eq(1, #warnings)
+  contains(warnings[1], "may contain a secret")
+end)
+
+test("bounds immutable session history and renders it", function()
+  local history = require("herdr-context.history")
+  local history_ui = require("herdr-context.ui.history")
+  config.setup({ history = { enabled = true, max_entries = 2 } })
+  history._reset()
+  for index = 1, 3 do
+    history.record({
+      kind = "test" .. index,
+      target = { pane_id = "w0:p" .. index, agent = "codex" },
+      payload = "payload " .. index,
+      bytes = 9,
+    })
+  end
+  local entries = history.get()
+  eq(2, #entries)
+  eq("test3", entries[1].kind)
+  eq("test2", entries[2].kind)
+  entries[1].kind = "mutated"
+  eq("test3", history.get()[1].kind)
+  local history_buf = history_ui.open()
+  eq("herdr-context-history", vim.bo[history_buf].filetype)
+  local rendered = table.concat(vim.api.nvim_buf_get_lines(history_buf, 0, -1, false), "\n")
+  contains(rendered, "test3")
+  contains(rendered, "w0:p3")
+  history_ui.toggle()
 end)
 
 test("deduplicates matching quickfix and Trouble items without dropping sections", function()
@@ -1314,9 +1386,24 @@ test("marks composer payloads stale and renders exact preview in a native scratc
   eq("wipe", vim.bo[ui_buf].bufhidden)
   eq(false, vim.bo[ui_buf].swapfile)
   eq("herdr-context-composer", vim.bo[ui_buf].filetype)
+  local active_composer = composer_ui._active()
+  truthy(active_composer.list_winid ~= active_composer.preview_winid)
+  eq("herdr-context-preview", vim.bo[active_composer.preview_bufnr].filetype)
   local rendered = table.concat(vim.api.nvim_buf_get_lines(ui_buf, 0, -1, false), "\n")
-  contains(rendered, session.bundle.payload)
+  local preview_rendered = table.concat(vim.api.nvim_buf_get_lines(active_composer.preview_bufnr, 0, -1, false), "\n")
+  contains(preview_rendered, session.bundle.payload)
   contains(rendered, "s stage + submit")
+  local instruction_ui = require("herdr-context.ui.instruction")
+  local instruction_buf = instruction_ui.open(session)
+  vim.cmd("stopinsert")
+  vim.api.nvim_buf_set_lines(instruction_buf, 0, -1, false, { "Keep the public API stable", "Add focused tests" })
+  instruction_ui.save()
+  truthy(vim.wait(100, function()
+    local payload = table.concat(vim.api.nvim_buf_get_lines(active_composer.preview_bufnr, 0, -1, false), "\n")
+    return payload:find("## Instructions", 1, true) ~= nil
+  end))
+  contains(session.bundle.payload, "Keep the public API stable")
+  contains(session.bundle.payload, "Add focused tests")
 
   vim.api.nvim_buf_set_lines(source, 0, -1, false, { "return false" })
   eq(true, session:is_stale())
@@ -1329,6 +1416,65 @@ test("marks composer payloads stale and renders exact preview in a native scratc
   transport.stage = original_transport_stage
   eq(0, stage_calls)
   session:close()
+  delete_buffer(source)
+end)
+
+test("applies presets, requires sensitive-content confirmation, and records successful staging", function()
+  local bundle = require("herdr-context.bundle")
+  local composer = require("herdr-context.composer")
+  local history = require("herdr-context.history")
+  config.setup({
+    history = { enabled = true, max_entries = 20 },
+    composer = { presets = { secure = { "selection" } } },
+  })
+  history._reset()
+  local source = buffer({ "password = hunter2" }, vim.fn.getcwd() .. "/lua/sensitive-test.lua")
+  local request = composer.capture_request({ bufnr = source, winid = vim.api.nvim_get_current_win(), line = 1 })
+  local session = composer._create_session(request)
+  session.entries = {
+    {
+      id = "selection",
+      name = "Current line",
+      status = "available",
+      section = {
+        id = "selection",
+        title = "Current line",
+        priority = 10,
+        reference = "@lua/sensitive-test.lua#L1",
+        language = "lua",
+        content = "password = hunter2",
+        format = "code",
+        fingerprint = "selection:sensitive",
+      },
+    },
+  }
+  eq(true, session:apply_preset("secure"))
+  eq(true, session.selected.selection)
+  truthy(session.bundle and session.bundle.payload)
+  eq(1, #session.safety_warnings)
+
+  local resolve_calls = 0
+  local stage_calls = 0
+  local original_resolve = targets.resolve
+  local original_stage = transport.stage
+  targets.resolve = function(_, _, _, callback)
+    resolve_calls = resolve_calls + 1
+    callback({ pane_id = "w0:p9", agent = "codex" })
+  end
+  transport.stage = function(_, _, _, callback)
+    stage_calls = stage_calls + 1
+    callback(true, nil, { mode = "literal" })
+  end
+  session:stage()
+  eq(0, resolve_calls, "first stage should only confirm the warning")
+  eq(true, session.safety_confirmed)
+  session:stage()
+  targets.resolve = original_resolve
+  transport.stage = original_stage
+  eq(1, resolve_calls)
+  eq(1, stage_calls)
+  eq(1, #history.get())
+  eq("composer", history.get()[1].kind)
   delete_buffer(source)
 end)
 
@@ -1402,6 +1548,7 @@ test("registers all user commands", function()
     "HerdrContextLocationList",
     "HerdrContextTarget",
     "HerdrContextAgents",
+    "HerdrContextHistory",
     "HerdrContextRefresh",
   }) do
     eq(2, vim.fn.exists(":" .. name), name)

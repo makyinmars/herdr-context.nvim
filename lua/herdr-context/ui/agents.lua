@@ -9,7 +9,10 @@ local namespace = vim.api.nvim_create_namespace("herdr-context-agents")
 local bufnr
 local winid
 local line_to_pane = {}
+local line_to_group = {}
 local subscriber
+local filter_text = ""
+local collapsed = {}
 
 local status_icons = {
   idle = "●",
@@ -111,6 +114,10 @@ local function agent_line(agent, current, options)
   if options.show_cwd then
     parts[#parts + 1] = shorten(agent.foreground_cwd or agent.cwd)
   end
+  local message = agent.message or agent.status_message
+  if message and message ~= "" then
+    parts[#parts + 1] = "— " .. tostring(message):gsub("[%s\r\n]+", " ")
+  end
   return truncate(
     table.concat(
       vim.tbl_filter(function(value)
@@ -122,6 +129,50 @@ local function agent_line(agent, current, options)
   ),
     status,
     prefix
+end
+
+local function matches_filter(agent)
+  if filter_text == "" then
+    return true
+  end
+  local values = {
+    agent.agent,
+    agent.display_agent,
+    agent.agent_status,
+    agent.workspace_label,
+    agent.workspace_id,
+    agent.tab_label,
+    agent.tab_id,
+    agent.pane_id,
+    agent.foreground_cwd,
+    agent.cwd,
+    agent.message,
+    agent.status_message,
+  }
+  local text = table.concat(
+    vim.tbl_map(
+      function(value)
+        return tostring(value)
+      end,
+      vim.tbl_filter(function(value)
+        return value ~= nil
+      end, values)
+    ),
+    " "
+  )
+  return text:lower():find(filter_text:lower(), 1, true) ~= nil
+end
+
+local function group_for(agent, mode)
+  if mode == "none" then
+    return nil, nil
+  elseif mode == "tab" then
+    local tab = agent.tab_label or agent.tab_id or "Unknown tab"
+    return "tab:" .. (agent.tab_id or tab), tab
+  end
+  local workspace = agent.workspace_label or agent.workspace_id or "Unknown workspace"
+  local tab = agent.tab_label or agent.tab_id or "Unknown tab"
+  return ("workspace:%s:tab:%s"):format(agent.workspace_id or workspace, agent.tab_id or tab), workspace .. " / " .. tab
 end
 
 function M.render()
@@ -137,6 +188,7 @@ function M.render()
   local pane_to_line = {}
   local first_agent_line
   line_to_pane = {}
+  line_to_group = {}
 
   if not current.connected then
     lines[1] = lines[1] .. "  × disconnected"
@@ -145,30 +197,55 @@ function M.render()
   end
   lines[#lines + 1] = ""
 
+  candidates = vim.tbl_filter(matches_filter, candidates)
+  if filter_text ~= "" then
+    lines[1] = lines[1] .. ("  /%s"):format(filter_text)
+  end
+
   if #candidates == 0 then
     lines[#lines + 1] = " No target agents in " .. cfg.target_scope .. " scope"
   else
+    local groups, group_by_id = {}, {}
     for _, agent in ipairs(candidates) do
-      local line, status, prefix = agent_line(agent, current, cfg.agents_view)
-      lines[#lines + 1] = line
-      local line_number = #lines
-      line_to_pane[line_number] = agent.pane_id
-      pane_to_line[agent.pane_id] = line_number
-      first_agent_line = first_agent_line or line_number
-      marks[#marks + 1] = {
-        line = line_number - 1,
-        status = status,
-        status_col = #prefix + 1,
-        status_end = #prefix + 1 + #(status_icons[status] or status_icons.unknown),
-        target_end = #prefix,
-        target = current.target_pane_id == agent.pane_id,
-      }
+      local group_id, group_label = group_for(agent, cfg.agents_view.group_by)
+      group_id = group_id or "ungrouped"
+      local group = group_by_id[group_id]
+      if not group then
+        group = { id = group_id, label = group_label, agents = {} }
+        group_by_id[group_id] = group
+        groups[#groups + 1] = group
+      end
+      group.agents[#group.agents + 1] = agent
+    end
+    for _, group in ipairs(groups) do
+      if group.label then
+        lines[#lines + 1] = (collapsed[group.id] and " ▸ " or " ▾ ") .. group.label
+        line_to_group[#lines] = group.id
+      end
+      if not group.label or not collapsed[group.id] then
+        for _, agent in ipairs(group.agents) do
+          local line, status, prefix = agent_line(agent, current, cfg.agents_view)
+          lines[#lines + 1] = line
+          local line_number = #lines
+          line_to_pane[line_number] = agent.pane_id
+          pane_to_line[agent.pane_id] = line_number
+          first_agent_line = first_agent_line or line_number
+          marks[#marks + 1] = {
+            line = line_number - 1,
+            status = status,
+            status_col = #prefix + 1,
+            status_end = #prefix + 1 + #(status_icons[status] or status_icons.unknown),
+            target_end = #prefix,
+            target = current.target_pane_id == agent.pane_id,
+          }
+        end
+      end
     end
   end
 
   lines[#lines + 1] = ""
-  lines[#lines + 1] = " <CR>/t target   f focus   r refresh"
-  lines[#lines + 1] = " q close"
+  lines[#lines + 1] = " <CR>/t target   f focus   p output"
+  lines[#lines + 1] = " / filter   Space fold   r refresh   q close"
 
   vim.bo[bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
@@ -230,7 +307,32 @@ function M.preview()
   if not agent then
     return
   end
-  require("herdr-context.ui.preview").open(agent)
+  local cfg = config.get()
+  require("herdr-context.ui.preview").open(agent, {
+    side = cfg.agents_view.side_preview,
+    source_winid = winid,
+    position = cfg.agents_view.position,
+  })
+end
+
+function M.filter()
+  vim.ui.input({ prompt = "Filter Herdr agents: ", default = filter_text }, function(value)
+    if value ~= nil then
+      filter_text = value:match("^%s*(.-)%s*$")
+      M.render()
+    end
+  end)
+end
+
+function M.toggle_group()
+  if not valid_window() then
+    return
+  end
+  local group = line_to_group[vim.api.nvim_win_get_cursor(winid)[1]]
+  if group then
+    collapsed[group] = not collapsed[group]
+    M.render()
+  end
 end
 
 function M.refresh()
@@ -250,6 +352,7 @@ local function cleanup()
   bufnr = nil
   winid = nil
   line_to_pane = {}
+  line_to_group = {}
 end
 
 function M.close()
@@ -296,6 +399,12 @@ function M.open()
   map("t", M.select_target, "Select Herdr target")
   map("f", M.focus, "Focus Herdr pane")
   map("p", M.preview, "Preview Herdr output")
+  map("/", M.filter, "Filter Herdr agents")
+  map(" ", M.toggle_group, "Toggle Herdr agent group")
+  map("c", function()
+    filter_text = ""
+    M.render()
+  end, "Clear Herdr agent filter")
 
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = bufnr,
@@ -324,6 +433,10 @@ end
 
 function M._line_to_pane()
   return vim.deepcopy(line_to_pane)
+end
+
+function M._filter()
+  return filter_text
 end
 
 return M
