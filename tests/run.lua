@@ -329,7 +329,7 @@ test("default transport wraps Codex multiline input and never presses Enter", fu
   truthy(ok, err)
   eq("bracketed_paste", result.mode)
   local output = read_log(log)
-  contains(output, "agent send")
+  contains(output, "pane send-text")
   truthy(not output:find("pane send%-keys"), "default transport must not send Enter")
   contains(output, "text=1b5b3230307e")
   contains(output, "1b5b3230317e")
@@ -428,8 +428,8 @@ end)
 test("normalizes state and returns immutable public snapshots", function()
   state._reset()
   state._replace({
-    version = "0.7.3",
-    protocol = 16,
+    version = "0.7.5",
+    protocol = 17,
     focused_workspace_id = "w0",
     focused_tab_id = "w0:t1",
     focused_pane_id = "w0:self",
@@ -716,8 +716,8 @@ test("watcher debounces events and falls back to polling", function()
 
   local snapshot_count = 0
   local raw = {
-    version = "0.7.3",
-    protocol = 16,
+    version = "0.7.5",
+    protocol = 17,
     focused_workspace_id = "w0",
     focused_tab_id = "w0:t1",
     agents = {

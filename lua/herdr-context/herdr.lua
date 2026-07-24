@@ -143,7 +143,7 @@ function M.read_agent(config, pane_id, opts, callback)
 end
 
 function M.send(config, pane_id, text, callback)
-  return M.run(config, { "agent", "send", pane_id, text }, callback)
+  return M.run(config, { "pane", "send-text", pane_id, text }, callback)
 end
 
 function M.submit(config, pane_id, callback)

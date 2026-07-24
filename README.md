@@ -11,7 +11,7 @@ submitting it.
 ## Requirements
 
 - Neovim 0.10 or newer
-- Herdr 0.7.0 or newer
+- Herdr 0.7.5 or newer
 - `jq` for the optional Herdr overlay target picker
 
 Neovim should normally be running in a Herdr pane so `HERDR_PANE_ID`, `HERDR_TAB_ID`, and
@@ -24,6 +24,9 @@ Install the Herdr side:
 ```sh
 herdr plugin install makyinmars/herdr-context.nvim
 ```
+
+Herdr 0.7.5 stores installed and linked plugins globally. If this companion plugin was installed only
+inside a named Herdr 0.7.3 session, run the install command again after upgrading.
 
 Install the Neovim side with lazy.nvim:
 
@@ -260,8 +263,8 @@ In `auto` mode, multiline payloads for Codex and Claude use terminal bracketed-p
 Unknown agents receive a single-line reference to a temporary Markdown context file. This avoids
 injecting literal newline bytes into an agent that may interpret them as Enter.
 
-The bracketed-paste contract has been checked end-to-end with Herdr 0.7.3 against Codex CLI 0.144.0
-and Claude Code 2.1.160: both lines remained in the input editor and each agent stayed `idle`. Unknown
+The transport uses Herdr 0.7.5's `pane send-text` API so staging remains non-submitting. In `auto` mode,
+the bracketed-paste contract keeps both lines in the input editor while the agent remains `idle`. Unknown
 or newly introduced agent families remain on the conservative context-file path until configured.
 
 ## Context composer
@@ -465,7 +468,7 @@ The transport safety guarantees remain:
 
 Default sends never submit:
 
-- context is passed to `herdr agent send` as one argv element;
+- context is passed to `herdr pane send-text` as one argv element;
 - no shell-concatenated command is used;
 - multiline input is bracketed-pasted only for configured agents, otherwise staged through a context file;
 - Enter is sent only by the separate `herdr pane send-keys <pane> enter` command when `submit = true`;
