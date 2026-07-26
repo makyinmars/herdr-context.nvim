@@ -46,6 +46,14 @@ Install the Neovim side with lazy.nvim:
       desc = "Compose Herdr Context",
     },
     {
+      "<leader>ap",
+      function()
+        require("herdr-context").prompt()
+      end,
+      mode = { "n", "v" },
+      desc = "Prompt Herdr with Code Context",
+    },
+    {
       "<leader>ay",
       function()
         require("herdr-context").reference()
@@ -116,6 +124,7 @@ herdr plugin link /path/to/herdr-context.nvim
 | `:HerdrContextSend` | Stage the reference and selected code |
 | `:HerdrContextDiagnostics` | Stage diagnostics for the current line or selection |
 | `:HerdrContextCompose [preset]` | Collect, preview, and stage a combined context bundle |
+| `:HerdrContextPrompt` | Open directly in the message editor with the current line or Visual selection attached |
 | `:HerdrContextSymbol` | Stage the innermost symbol under the cursor |
 | `:HerdrContextHunk` | Stage the Git hunk under the cursor |
 | `:HerdrContextQuickfix` | Stage the current quickfix list |
@@ -271,9 +280,15 @@ or newly introduced agent families remain on the conservative context-file path 
 
 The two-pane composer freezes the source buffer, cursor, selection, changedtick, path, and working directory
 before providers begin. Providers collect independently, and one timeout or failure does not block the
-others. The left checklist shows provider status, target, preset, instruction, warnings, and byte size;
-the right pane contains the exact
-Markdown payload that will be staged.
+others. The polished left panel shows the attached context, source, target, message, warnings, and byte
+budget; the right pane contains the exact Markdown payload that will be staged.
+
+For the fastest code-to-agent flow, select code in Visual mode and run `:HerdrContextPrompt` (or map
+`require("herdr-context").prompt()`). The message editor opens immediately inside Neovim with that exact
+selection attached. Write the thought you would otherwise type in the agent, then press `<C-Enter>` to
+send and submit it. `<C-s>` keeps the message and returns to the composer so you can inspect or adjust the
+attached context first. In Normal mode, the same action starts from the current line and discovers the
+containing symbol, hunk, and diagnostics.
 
 Normal mode selects the innermost symbol, the hunk under the cursor, and diagnostics scoped to the
 symbol (then the hunk). If neither symbol nor hunk is available, it selects the current line. Visual
@@ -283,11 +298,12 @@ Quickfix, location-list, and Trouble sources are deliberately opt-in defaults.
 Composer controls are:
 
 - `<Space>`: toggle the provider under the cursor;
-- `i`: add or edit the instruction included at the top of the bundle;
+- `i`: write or edit the freehand message included at the top of the bundle;
 - `P`: apply a named provider preset;
 - `t`: choose a target and return to the composer;
 - `r`: recapture the source and rerun providers;
 - `s`: stage the exact preview (or stage and submit when `submit = true`);
+- `S`: explicitly send and submit now, regardless of the `submit` default;
 - `p`: toggle the full payload preview;
 - `h`: inspect the session staging history;
 - `<Tab>`: switch between checklist and preview panes;
@@ -295,9 +311,10 @@ Composer controls are:
 - `q` or `<Esc>`: cancel.
 
 Presets can also be selected directly with commands such as `:HerdrContextCompose debug`. Only available
-providers are selected. `i` opens a multiline Markdown instruction editor; save it with `<C-s>` or cancel
-with `q` from Normal mode. Instructions are rendered as a deterministic `## Instructions` section and
-are included in the same byte budget and exact-preview path as provider content.
+providers are selected. `i` opens a multiline Markdown message editor; keep it with `<C-s>`, send it with
+`<C-Enter>` (or `<M-Enter>` in terminals that do not distinguish Control-Enter), or cancel with `q` from
+Normal mode. Messages are rendered as a deterministic `## Instructions` section and are included in the
+same byte budget and exact-preview path as provider content.
 
 Editing the source buffer marks the preview stale and disables staging until it is refreshed. The
 combined final payload—including headings and Markdown fences—is rejected when it exceeds

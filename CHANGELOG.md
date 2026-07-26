@@ -2,6 +2,12 @@
 
 All notable changes to `herdr-context.nvim` are documented here.
 
+## Unreleased
+
+- Add `:HerdrContextPrompt` and `prompt()` for a Visual-selection-to-message workflow entirely inside Neovim.
+- Add an explicit `S`/`<C-Enter>` send-now action without changing the safe non-submitting default.
+- Refresh the composer and message editor with clearer context attachments, source details, payload sizing, and key hints.
+
 ## 0.4.0 - 2026-07-16
 
 - Replace the composer with paired provider-checklist and exact-payload panes.

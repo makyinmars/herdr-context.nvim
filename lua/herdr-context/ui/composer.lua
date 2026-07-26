@@ -6,12 +6,12 @@ local namespace = vim.api.nvim_create_namespace("herdr-context-composer")
 local active
 
 local status_highlights = {
-  ["x"] = "DiagnosticOk",
-  [" "] = "Comment",
-  ["…"] = "DiagnosticInfo",
-  ["-"] = "Comment",
+  ["✓"] = "DiagnosticOk",
+  ["○"] = "Comment",
+  ["◌"] = "DiagnosticInfo",
+  ["–"] = "Comment",
   ["!"] = "DiagnosticError",
-  [">"] = "DiagnosticWarn",
+  ["↑"] = "DiagnosticWarn",
 }
 
 local function format_bytes(bytes)
@@ -54,17 +54,17 @@ end
 
 local function entry_status(session, entry)
   if entry.status == "collecting" then
-    return "…"
+    return "◌"
   elseif entry.status == "unavailable" then
-    return "-"
+    return "–"
   elseif entry.status == "failed" or entry.excluded then
     return "!"
   elseif entry.oversized then
-    return ">"
+    return "↑"
   elseif session.selected[entry.id] then
-    return "x"
+    return "✓"
   end
-  return " "
+  return "○"
 end
 
 local function setup_highlights()
@@ -74,6 +74,7 @@ local function setup_highlights()
     HerdrContextComposerError = "DiagnosticError",
     HerdrContextComposerSize = "Comment",
     HerdrContextComposerFooter = "Comment",
+    HerdrContextComposerLabel = "Comment",
     HerdrContextComposerInstruction = "Special",
   }) do
     vim.api.nvim_set_hl(0, name, { default = true, link = link })
@@ -96,44 +97,83 @@ local function set_lines(bufnr, lines, marks)
   vim.bo[bufnr].modifiable = false
 end
 
+local function source_label(session)
+  local captured = session.request.capture
+  local path = captured.relative_path or "[unnamed buffer]"
+  local range = captured.start_line == captured.end_line and ("L%d"):format(captured.start_line)
+    or ("L%d–L%d"):format(captured.start_line, captured.end_line)
+  local mode = session.request.selection and "visual" or "cursor"
+  return ("%s · %s · %s"):format(path, range, mode)
+end
+
+local function message_label(instruction)
+  if instruction == "" then
+    return "Write your request  (press i)"
+  end
+  local parts = vim.split(instruction, "\n", { plain = true })
+  local first = parts[1]:gsub("%s+", " "):match("^%s*(.-)%s*$")
+  if #parts > 1 then
+    return ("%s  (+%d lines)"):format(first, #parts - 1)
+  end
+  return first
+end
+
 local function render_list(ui)
   local session = ui.session
   local cfg = config.get()
   session:is_stale()
   local built = session.bundle
   local bytes = built and built.bytes or 0
+  local selected = 0
+  for _, enabled in pairs(session.selected) do
+    selected = selected + (enabled and 1 or 0)
+  end
   local lines = {
-    "Herdr Context",
-    ("Target: %s"):format(target_label(session.target)),
-    ("Budget: %s / %s"):format(format_bytes(bytes), format_bytes(cfg.max_payload_bytes)),
-    ("Preset: %s"):format(session.preset or "custom"),
-    ("Instruction: %s"):format(session.instruction ~= "" and session.instruction:gsub("\n", " ") or "none (press i)"),
+    "HERDR · CONTEXT COMPOSER",
+    "",
+    ("  TARGET   %s"):format(target_label(session.target)),
+    ("  SOURCE   %s"):format(source_label(session)),
+    ("  MESSAGE  %s"):format(message_label(session.instruction)),
+    ("  BUDGET   %s / %s"):format(format_bytes(bytes), format_bytes(cfg.max_payload_bytes)),
+    ("  PRESET   %s"):format(session.preset or "custom"),
   }
   local marks = {
     { line = 0, start_col = 0, end_col = #lines[1], hl = "HerdrContextComposerHeader" },
-    { line = 4, start_col = 0, end_col = #lines[5], hl = "HerdrContextComposerInstruction" },
+    { line = 2, start_col = 2, end_col = 8, hl = "HerdrContextComposerLabel" },
+    { line = 3, start_col = 2, end_col = 8, hl = "HerdrContextComposerLabel" },
+    { line = 4, start_col = 2, end_col = #lines[5], hl = "HerdrContextComposerInstruction" },
+    { line = 5, start_col = 2, end_col = 8, hl = "HerdrContextComposerLabel" },
+    { line = 6, start_col = 2, end_col = 8, hl = "HerdrContextComposerLabel" },
   }
   ui.line_to_id = {}
 
   if session.stale then
-    lines[#lines + 1] = "STALE — source changed; press r"
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "  ! Source changed · press r to recapture"
     marks[#marks + 1] = {
       line = #lines - 1,
-      start_col = 0,
+      start_col = 2,
       end_col = #lines[#lines],
       hl = "HerdrContextComposerStale",
     }
   elseif session.collecting then
-    lines[#lines + 1] = "Collecting providers…"
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "  ◌ Collecting context sources…"
   end
   lines[#lines + 1] = ""
-  lines[#lines + 1] = "Providers"
+  lines[#lines + 1] = ("CONTEXT SOURCES · %d attached"):format(selected)
+  marks[#marks + 1] = {
+    line = #lines - 1,
+    start_col = 0,
+    end_col = #lines[#lines],
+    hl = "HerdrContextComposerHeader",
+  }
 
   for _, entry in ipairs(session.entries) do
     local status = entry_status(session, entry)
     local summary = entry.excluded or (entry.section and entry.section.summary) or entry.error or ""
     local size = entry.bytes and entry.bytes > 0 and format_bytes(entry.bytes) or ""
-    local line = ("[%s] %s"):format(status, entry.name)
+    local line = ("  %s  %s"):format(status, entry.name)
     if size ~= "" then
       line = line .. " · " .. size
     end
@@ -141,15 +181,15 @@ local function render_list(ui)
     ui.line_to_id[#lines] = entry.id
     marks[#marks + 1] = {
       line = #lines - 1,
-      start_col = 0,
-      end_col = 3,
+      start_col = 2,
+      end_col = 2 + #status,
       hl = status_highlights[status],
     }
     if summary ~= "" then
-      lines[#lines + 1] = "    " .. summary
+      lines[#lines + 1] = "     " .. summary
       marks[#marks + 1] = {
         line = #lines - 1,
-        start_col = 4,
+        start_col = 5,
         end_col = #lines[#lines],
         hl = entry.excluded and "HerdrContextComposerError" or "Comment",
       }
@@ -158,7 +198,7 @@ local function render_list(ui)
 
   if built and built.oversized then
     lines[#lines + 1] = ""
-    lines[#lines + 1] = built.error
+    lines[#lines + 1] = "! " .. built.error
     marks[#marks + 1] = {
       line = #lines - 1,
       start_col = 0,
@@ -186,9 +226,9 @@ local function render_list(ui)
 
   lines[#lines + 1] = ""
   local action = cfg.submit and "stage + submit" or "stage"
-  lines[#lines + 1] = ("Space toggle · s %s · i instruct"):format(action)
-  lines[#lines + 1] = "P preset · t target · r refresh"
-  lines[#lines + 1] = "p preview · h history · ? help · q close"
+  lines[#lines + 1] = "i message · Space attach · P preset"
+  lines[#lines + 1] = ("s %s · S send now · t target"):format(action)
+  lines[#lines + 1] = "r refresh · p preview · ? help · q close"
   for index = #lines - 2, #lines do
     marks[#marks + 1] = { line = index - 1, start_col = 0, end_col = #lines[index], hl = "HerdrContextComposerFooter" }
   end
@@ -216,6 +256,10 @@ local function render_preview(ui)
     lines = { "Payload preview hidden.", "", "Press p to show it." }
   end
   set_lines(ui.preview_bufnr, lines)
+  if valid_window(ui.preview_winid) then
+    local bytes = session.bundle and session.bundle.bytes or 0
+    pcall(vim.api.nvim_win_set_config, ui.preview_winid, { title = (" Payload · %s "):format(format_bytes(bytes)) })
+  end
 end
 
 local function render(ui)
@@ -275,16 +319,17 @@ end
 local function show_help()
   vim.notify(
     table.concat({
-      "Space  toggle provider",
-      "i      edit instruction",
-      "P      choose preset",
-      "t      choose target",
-      "r      recapture source",
-      "s      stage bundle",
-      "p      toggle payload preview",
-      "h      open send history",
-      "Tab    switch composer panes",
-      "q/Esc  cancel",
+      "Space    attach/detach context",
+      "i        write the message to the agent",
+      "P        choose context preset",
+      "t        choose target",
+      "r        recapture source",
+      "s        stage (follows the submit setting)",
+      "S        send and submit now",
+      "p        toggle exact payload",
+      "h        open send history",
+      "Tab      switch composer panes",
+      "q/Esc    cancel",
     }, "\n"),
     vim.log.levels.INFO,
     { title = "Herdr Context keys" }
@@ -306,6 +351,7 @@ local function configure_window(winid, cursorline)
   vim.wo[winid].foldcolumn = "0"
   vim.wo[winid].wrap = false
   vim.wo[winid].cursorline = cursorline
+  vim.wo[winid].winhighlight = "Normal:NormalFloat,FloatBorder:Comment,FloatTitle:Title,CursorLine:Visual"
 end
 
 function M.open(session)
@@ -331,7 +377,7 @@ function M.open(session)
     height = height,
     row = row,
     col = col,
-    title = " Context ",
+    title = " Context & message ",
     title_pos = "center",
   })
   local preview_winid = vim.api.nvim_open_win(preview_bufnr, false, {
@@ -342,7 +388,7 @@ function M.open(session)
     height = height,
     row = row,
     col = col + list_width + gap,
-    title = " Exact payload ",
+    title = " Payload · 0 B ",
     title_pos = "center",
   })
   local ui = {
@@ -381,6 +427,9 @@ function M.open(session)
     map(bufnr, "s", function()
       session:stage()
     end, "Stage Herdr context bundle")
+    map(bufnr, "S", function()
+      session:stage({ submit = true })
+    end, "Send Herdr context bundle now")
     map(bufnr, "t", function()
       session:change_target()
     end, "Change Herdr target")
@@ -392,7 +441,7 @@ function M.open(session)
     end, "Toggle Herdr payload preview")
     map(bufnr, "i", function()
       edit_instruction(ui)
-    end, "Edit Herdr instruction")
+    end, "Write Herdr message")
     map(bufnr, "P", function()
       choose_preset(ui)
     end, "Choose Herdr context preset")

@@ -49,7 +49,13 @@ function M.prepare(config, target, payload)
   return "Context staged in @" .. path, "context_file", nil, path
 end
 
-local function after_send(config, target, callback)
+local function after_send(config, target, callback, opts)
+  opts = opts or {}
+  local submit = opts.submit
+  if submit == nil then
+    submit = config.submit
+  end
+
   local function focus_if_needed()
     if not config.focus_after_send then
       callback(true)
@@ -60,7 +66,7 @@ local function after_send(config, target, callback)
     end)
   end
 
-  if not config.submit then
+  if not submit then
     focus_if_needed()
     return
   end
@@ -74,7 +80,8 @@ local function after_send(config, target, callback)
   end)
 end
 
-function M.stage(config, target, payload, callback)
+function M.stage(config, target, payload, callback, opts)
+  opts = opts or {}
   local staged, mode, prepare_err, context_file = M.prepare(config, target, payload)
   if not staged then
     callback(false, prepare_err)
@@ -87,8 +94,12 @@ function M.stage(config, target, payload, callback)
       return
     end
     after_send(config, target, function(ok, final_err)
-      callback(ok, final_err, { mode = mode, context_file = context_file })
-    end)
+      local submitted = opts.submit
+      if submitted == nil then
+        submitted = config.submit
+      end
+      callback(ok, final_err, { mode = mode, context_file = context_file, submitted = submitted })
+    end, opts)
   end)
 end
 

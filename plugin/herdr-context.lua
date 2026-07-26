@@ -36,6 +36,13 @@ end, {
   end,
 })
 
+vim.api.nvim_create_user_command("HerdrContextPrompt", function(args)
+  require("herdr-context").prompt(command_opts(args))
+end, {
+  desc = "Write a message with the current code context and send it to a Herdr agent",
+  range = true,
+})
+
 vim.api.nvim_create_user_command("HerdrContextSymbol", function()
   require("herdr-context").symbol()
 end, { desc = "Stage the current symbol in a Herdr agent prompt" })

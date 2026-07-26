@@ -117,6 +117,11 @@ function M.compose(opts)
   return require("herdr-context.composer").open(opts)
 end
 
+function M.prompt(opts)
+  opts = vim.tbl_extend("force", opts or {}, { edit_instruction = true })
+  return require("herdr-context.composer").open(opts)
+end
+
 function M.symbol(opts)
   return require("herdr-context.composer").stage_provider("symbol", opts)
 end

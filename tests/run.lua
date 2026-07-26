@@ -280,12 +280,12 @@ local function read_log(path)
   return table.concat(vim.fn.readfile(path), "\n")
 end
 
-local function stage_and_wait(cfg, target, payload)
+local function stage_and_wait(cfg, target, payload, opts)
   local done, values = false, nil
   transport.stage(cfg, target, payload, function(...)
     values = { n = select("#", ...), ... }
     done = true
-  end)
+  end, opts)
   truthy(
     vim.wait(3000, function()
       return done
@@ -367,6 +367,22 @@ test("submission is a separate explicit opt-in command", function()
   })
   local ok, err = stage_and_wait(cfg, { pane_id = "w1:p2", agent = "codex" }, "@file.lua#L1")
   truthy(ok, err)
+  contains(read_log(log), "pane send-keys")
+  vim.fn.delete(log)
+end)
+
+test("supports an explicit one-shot submission without changing the safe default", function()
+  local log = vim.fn.tempname()
+  vim.fn.writefile({}, log)
+  vim.env.FAKE_HERDR_LOG = log
+  local cfg = config.setup({
+    herdr_bin = vim.fn.getcwd() .. "/tests/fixtures/fake-herdr.sh",
+    submit = false,
+  })
+  local ok, err, result = stage_and_wait(cfg, { pane_id = "w1:p2", agent = "codex" }, "@file.lua#L1", { submit = true })
+  truthy(ok, err)
+  eq(true, result.submitted)
+  eq(false, cfg.submit)
   contains(read_log(log), "pane send-keys")
   vim.fn.delete(log)
 end)
@@ -1353,6 +1369,29 @@ test("normalizes loaded Trouble views and stays optional when absent", function(
   eq("ERROR", section.items[1].severity)
 end)
 
+test("opens the prompt editor with an exact Visual selection attached", function()
+  config.setup({ presence = { enabled = false } })
+  local source = buffer({ "local alpha = 1", "local bravo = 2" }, vim.fn.getcwd() .. "/lua/prompt-test.lua")
+  vim.api.nvim_set_current_buf(source)
+  local session = require("herdr-context").prompt({
+    bufnr = source,
+    winid = vim.api.nvim_get_current_win(),
+    selection = { mode = "v", start = { 1, 7 }, finish = { 2, 11 } },
+  })
+  truthy(session)
+  truthy(
+    vim.wait(100, function()
+      return require("herdr-context.ui.instruction")._active() ~= nil
+    end),
+    "prompt message editor did not open"
+  )
+  eq("alpha = 1\nlocal bravo", session.request.capture.text)
+  eq("v", session.request.mode)
+  require("herdr-context.ui.instruction").close(session)
+  session:close()
+  delete_buffer(source)
+end)
+
 test("marks composer payloads stale and renders exact preview in a native scratch buffer", function()
   local bundle = require("herdr-context.bundle")
   local composer = require("herdr-context.composer")
@@ -1542,6 +1581,7 @@ test("registers all user commands", function()
     "HerdrContextSend",
     "HerdrContextDiagnostics",
     "HerdrContextCompose",
+    "HerdrContextPrompt",
     "HerdrContextSymbol",
     "HerdrContextHunk",
     "HerdrContextQuickfix",

@@ -209,6 +209,15 @@ local function collect(session)
     rescope_diagnostics(session)
     rebuild(session)
     update(session)
+    local pending_stage = session.pending_stage
+    session.pending_stage = nil
+    if pending_stage then
+      vim.schedule(function()
+        if not session.closed then
+          session:stage(pending_stage)
+        end
+      end)
+    end
   end)
 end
 
@@ -316,9 +325,15 @@ local function create_session(request, opts)
     end)
   end
 
-  function session:stage()
+  function session:stage(stage_opts)
+    stage_opts = stage_opts or {}
     if self.collecting then
-      notify("Context providers are still collecting", vim.log.levels.WARN)
+      if stage_opts.wait then
+        self.pending_stage = vim.deepcopy(stage_opts)
+        notify("Context is still collecting; it will send when ready")
+      else
+        notify("Context providers are still collecting", vim.log.levels.WARN)
+      end
       return
     end
     if self:is_stale() then
@@ -367,10 +382,12 @@ local function create_session(request, opts)
           instruction = self.instruction,
           preset = self.preset,
           mode = result.mode,
+          submitted = result.submitted,
         })
-        notify(("Staged context for %s (%s)%s"):format(target.agent or "agent", target.pane_id, suffix))
+        local action = result.submitted and "Sent" or "Staged"
+        notify(("%s context for %s (%s)%s"):format(action, target.agent or "agent", target.pane_id, suffix))
         self:close()
-      end)
+      end, { submit = stage_opts.submit })
     end)
   end
 
@@ -405,6 +422,13 @@ function M.open(opts)
   local session = create_session(request, opts)
   require("herdr-context.ui.composer").open(session)
   collect(session)
+  if opts.edit_instruction then
+    vim.schedule(function()
+      if not session.closed then
+        require("herdr-context.ui.instruction").open(session)
+      end
+    end)
+  end
   return session
 end
 
