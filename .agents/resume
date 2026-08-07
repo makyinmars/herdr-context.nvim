@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+for command in git jq make nvim stylua; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    printf '[resume] Missing required command: %s (rerun .agents/setup)\n' "$command" >&2
+    exit 1
+  fi
+done
+
+printf '[resume] Development tools are ready.\n'

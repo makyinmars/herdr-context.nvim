@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+started=$SECONDS
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+printf '[setup] Checking system packages...\n'
+packages=(ca-certificates curl git jq make tar unzip)
+missing=()
+for package in "${packages[@]}"; do
+  if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq 'install ok installed'; then
+    missing+=("$package")
+  fi
+done
+if ((${#missing[@]})); then
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
+fi
+
+case "$(uname -m)" in
+  x86_64) asset_arch=x86_64 ;;
+  *) printf '[setup] Unsupported orb architecture: %s\n' "$(uname -m)" >&2; exit 1 ;;
+esac
+
+nvim_version=v0.11.4
+nvim_prefix="/usr/local/lib/nvim-$nvim_version"
+if ! command -v nvim >/dev/null 2>&1; then
+  printf '[setup] Installing Neovim %s...\n' "$nvim_version"
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  curl --fail --location --retry 3 \
+    "https://github.com/neovim/neovim/releases/download/$nvim_version/nvim-linux-$asset_arch.tar.gz" \
+    --output "$tmp/nvim.tar.gz"
+  tar -xzf "$tmp/nvim.tar.gz" -C "$tmp"
+  sudo rm -rf "$nvim_prefix"
+  sudo mv "$tmp/nvim-linux-$asset_arch" "$nvim_prefix"
+  sudo ln -sfn "$nvim_prefix/bin/nvim" /usr/local/bin/nvim
+  rm -rf "$tmp"
+  trap - EXIT
+fi
+
+stylua_version=v2.1.0
+if ! command -v stylua >/dev/null 2>&1; then
+  printf '[setup] Installing StyLua %s...\n' "$stylua_version"
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  curl --fail --location --retry 3 \
+    "https://github.com/JohnnyMorganz/StyLua/releases/download/$stylua_version/stylua-linux-$asset_arch.zip" \
+    --output "$tmp/stylua.zip"
+  unzip -q "$tmp/stylua.zip" -d "$tmp"
+  sudo install -m 0755 "$tmp/stylua" /usr/local/bin/stylua
+  rm -rf "$tmp"
+  trap - EXIT
+fi
+
+printf '[setup] Ready in %ss: %s; %s\n' \
+  "$((SECONDS - started))" "$(nvim --version | head -n 1)" "$(stylua --version)"
