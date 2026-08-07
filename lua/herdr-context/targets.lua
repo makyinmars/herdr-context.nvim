@@ -223,8 +223,10 @@ function M.resolve(config, picker, opts, callback)
       if remembered then
         selected = remembered
         state.set_target(remembered.pane_id)
-        callback(remembered)
-        return
+        if #candidates == 1 or config.remember_target == "workspace" then
+          callback(remembered)
+          return
+        end
       elseif selected then
         selected = nil
         state.set_target(nil)

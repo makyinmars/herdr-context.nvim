@@ -425,13 +425,15 @@ The shared snapshot supplies live agent and layout metadata. Candidates are rank
 `target_scope` filters that list before ranking. The current Herdr pane is excluded. Pane IDs are used
 internally because labels such as `codex` are not necessarily unique.
 
-The selected pane is still checked against a fresh snapshot before every send. If it disappeared, the
-selection is cleared and the picker reopens (or the sole remaining candidate is selected when
-`auto_select = true`). `vim.ui.select` drives the picker, so existing Snacks integrations are honored.
+The selected pane is still checked against a fresh snapshot before every send. With the default
+`remember_target = "session"`, the picker reopens whenever multiple agents are live instead of silently
+reusing the previous destination. A sole remaining candidate is selected when `auto_select = true`.
+`vim.ui.select` drives the picker, so existing Snacks integrations are honored.
 
 The Herdr companion action `herdr-context.pin-target` opens an overlay picker. It stores one pane ID per
 workspace in the plugin config directory. Neovim reads the same file. Set `remember_target = "workspace"`
-to make Neovim selections update it too, or set `HERDR_CONTEXT_CONFIG` to override the shared file path.
+to make Neovim selections update it too and keep that explicit pin across sends, or set
+`HERDR_CONTEXT_CONFIG` to override the shared file path.
 
 ## Payloads
 

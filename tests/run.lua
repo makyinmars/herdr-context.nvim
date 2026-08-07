@@ -276,6 +276,37 @@ test("clears a stale remembered pane and resolves a live replacement", function(
   eq("w2:live", targets.selected().pane_id)
 end)
 
+test("prompts again for a target when multiple agents are live", function()
+  targets.clear()
+  local cfg = config.setup({ target_scope = "session", remember_target = "session", auto_select = true })
+  targets.remember(cfg, { pane_id = "w1:p1", agent = "codex" })
+  local original_snapshot = herdr.snapshot
+  herdr.snapshot = function(_, callback)
+    callback({
+      agents = {
+        { pane_id = "w1:p1", workspace_id = "w1", tab_id = "w1:t1", agent = "codex", agent_status = "idle" },
+        { pane_id = "w1:p2", workspace_id = "w1", tab_id = "w1:t1", agent = "codex", agent_status = "idle" },
+      },
+      workspaces = {},
+      tabs = {},
+    })
+  end
+  local picker_calls = 0
+  local resolved
+  targets.resolve(cfg, {
+    select = function(candidates, callback)
+      picker_calls = picker_calls + 1
+      callback(candidates[2])
+    end,
+  }, {}, function(target)
+    resolved = target
+  end)
+  herdr.snapshot = original_snapshot
+  eq(1, picker_calls)
+  eq("w1:p2", resolved.pane_id)
+  eq("w1:p2", targets.selected().pane_id)
+end)
+
 local function read_log(path)
   return table.concat(vim.fn.readfile(path), "\n")
 end
