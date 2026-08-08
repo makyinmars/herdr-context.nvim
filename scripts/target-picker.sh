@@ -7,7 +7,7 @@ config_dir="${HERDR_PLUGIN_CONFIG_DIR:-${HOME}/.config/herdr/plugins/config/herd
 config_file="${HERDR_CONTEXT_CONFIG:-${config_dir}/targets}"
 
 if ! command -v jq >/dev/null 2>&1; then
-  printf 'herdr-context: jq is required by the overlay target picker\n' >&2
+  printf 'herdr-context: jq is required by the popup target picker\n' >&2
   read -r -p 'Press Enter to close... ' _
   exit 1
 fi

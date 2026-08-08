@@ -6,13 +6,13 @@ submitting it.
 `herdr-context.nvim` is one repository with two install surfaces:
 
 - a Neovim plugin for collecting, formatting, and staging context;
-- a Herdr companion plugin with an overlay action for pinning the default target agent.
+- a Herdr companion plugin with a transient popup for pinning the default target agent.
 
 ## Requirements
 
 - Neovim 0.10 or newer
 - Herdr 0.7.5 or newer
-- `jq` for the optional Herdr overlay target picker
+- `jq` for the optional Herdr popup target picker
 
 Neovim should normally be running in a Herdr pane so `HERDR_PANE_ID`, `HERDR_TAB_ID`, and
 `HERDR_WORKSPACE_ID` are available.
@@ -507,7 +507,9 @@ The selected pane is still checked against a fresh snapshot before every send. W
 reusing the previous destination. A sole remaining candidate is selected when `auto_select = true`.
 `vim.ui.select` drives the picker, so existing Snacks integrations are honored.
 
-The Herdr companion action `herdr-context.pin-target` opens an overlay picker. It stores one pane ID per
+The Herdr companion action `herdr-context.pin-target` opens an 80%-wide, 20-row popup picker. The popup
+is transient: it does not join the tiled layout, appear in agent snapshots, or emit pane lifecycle
+events, and it closes when the picker exits. It stores one pane ID per
 workspace in the plugin config directory. Neovim reads the same file. Set `remember_target = "workspace"`
 to make Neovim selections update it too and keep that explicit pin across sends, or set
 `HERDR_CONTEXT_CONFIG` to override the shared file path.
@@ -585,4 +587,4 @@ The test suite also covers deterministic bundles, provider timeout and cancellat
 fixtures, MiniDiff add/change/delete hunks, Git diff parsing, quickfix normalization, stale composer
 buffers, exact preview rendering, and combined byte budgets. Transport tests use a fake Herdr
 executable; presence tests use sanitized socket fixtures and fake clients. Shell smoke tests exercise
-the companion overlay launcher, target ranking, and workspace target persistence.
+the companion popup launcher and manifest sizing, target ranking, and workspace target persistence.

@@ -15,12 +15,19 @@ HERDR_PLUGIN_ID='custom-context' \
 HERDR_PANE_ID='w0:self' \
   "$root/scripts/open-target-picker.sh" >/dev/null
 
-expected_open=$'argv\tplugin\tpane\topen\t--plugin\tcustom-context\t--entrypoint\ttarget-picker\t--placement\toverlay\t--focus\t--target-pane\tw0:self'
+expected_open=$'argv\tplugin\tpane\topen\t--plugin\tcustom-context\t--entrypoint\ttarget-picker\t--placement\tpopup\t--focus\t--target-pane\tw0:self'
 if ! grep -Fqx "$expected_open" "$log"; then
   printf 'open-target-picker.sh passed unexpected arguments\n' >&2
   sed -n '1,20p' "$log" >&2
   exit 1
 fi
+
+for declaration in 'placement = "popup"' 'width = "80%"' 'height = 20'; do
+  if ! grep -Fqx "$declaration" "$root/herdr-plugin.toml"; then
+    printf 'target picker manifest is missing %s\n' "$declaration" >&2
+    exit 1
+  fi
+done
 
 snapshot='{"id":"fake","result":{"snapshot":{"focused_workspace_id":"w0","workspaces":[{"workspace_id":"w0","label":"current"},{"workspace_id":"w1","label":"other"}],"tabs":[{"tab_id":"w0:t1","label":"api"},{"tab_id":"w1:t1","label":"web"}],"agents":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent":"claude","agent_status":"idle","cwd":"/tmp/other"},{"pane_id":"w0:p2","workspace_id":"w0","tab_id":"w0:t1","agent":"codex","agent_status":"working","cwd":"/tmp/current"}]}}}'
 config_file="$tmp/targets"

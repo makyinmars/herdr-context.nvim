@@ -14,5 +14,7 @@ command = ["bash", "scripts/open-target-picker.sh"]
 [[panes]]
 id = "target-picker"
 title = "Pin context target"
-placement = "overlay"
+placement = "popup"
+width = "80%"
+height = 20
 command = ["bash", "scripts/target-picker.sh"]
