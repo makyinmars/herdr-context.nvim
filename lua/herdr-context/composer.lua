@@ -240,6 +240,7 @@ local function create_session(request, opts)
     entries = {},
     selected = {},
     target = targets.selected(),
+    target_label = opts.target_label,
     preview = config.get().composer.preview,
     collecting = false,
     stale = false,
@@ -249,6 +250,7 @@ local function create_session(request, opts)
     track = opts.wait == true,
     tracking_timeout_ms = opts.timeout_ms,
     preview_result = opts.preview_result == true,
+    stage_handler = opts.stage_handler,
     safety_warnings = {},
     safety_confirmed = false,
   }
@@ -316,6 +318,10 @@ local function create_session(request, opts)
   end
 
   function session:change_target()
+    if self.stage_handler then
+      notify("Delegation creates a new target; no existing target is needed")
+      return
+    end
     targets.resolve(config.get(), picker, { force = true }, function(target, err)
       if not target then
         if err ~= "Target selection cancelled" then
@@ -359,6 +365,11 @@ local function create_session(request, opts)
         "Potential sensitive content detected; review the warnings and press s again to stage",
         vim.log.levels.WARN
       )
+      return
+    end
+
+    if self.stage_handler then
+      self.stage_handler(self, stage_opts)
       return
     end
 
@@ -440,6 +451,10 @@ local function create_session(request, opts)
     if self.ui_close then
       self.ui_close()
     end
+  end
+
+  function session:selected_ids()
+    return selected_ids(self)
   end
 
   return session

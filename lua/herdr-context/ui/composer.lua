@@ -131,7 +131,7 @@ local function render_list(ui)
   local lines = {
     "HERDR · CONTEXT COMPOSER",
     "",
-    ("  TARGET   %s"):format(target_label(session.target)),
+    ("  TARGET   %s"):format(session.target_label or target_label(session.target)),
     ("  SOURCE   %s"):format(source_label(session)),
     ("  MESSAGE  %s"):format(message_label(session.instruction)),
     ("  BUDGET   %s / %s"):format(format_bytes(bytes), format_bytes(cfg.max_payload_bytes)),
@@ -225,9 +225,13 @@ local function render_list(ui)
   end
 
   lines[#lines + 1] = ""
-  local action = cfg.submit and "stage + submit" or "stage"
   lines[#lines + 1] = "i message · Space attach · P preset"
-  lines[#lines + 1] = ("s %s · S send now · t target"):format(action)
+  if session.stage_handler then
+    lines[#lines + 1] = "s/S create agent + delegate context"
+  else
+    local action = cfg.submit and "stage + submit" or "stage"
+    lines[#lines + 1] = ("s %s · S send now · t target"):format(action)
+  end
   lines[#lines + 1] = "r refresh · p preview · ? help · q close"
   for index = #lines - 2, #lines do
     marks[#marks + 1] = { line = index - 1, start_col = 0, end_col = #lines[index], hl = "HerdrContextComposerFooter" }

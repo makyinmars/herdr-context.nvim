@@ -726,6 +726,315 @@ test("requests and decodes Herdr agent detection explanations", function()
   eq("blocked", explanation.state)
 end)
 
+test("creates delegation destinations and starts named agents with exact Herdr argv", function()
+  local original_run = herdr.run
+  local seen = {}
+  herdr.run = function(_, args, callback)
+    seen[#seen + 1] = vim.deepcopy(args)
+    local result
+    if args[1] == "pane" then
+      result = { pane = { pane_id = "w0:split" } }
+    elseif args[1] == "tab" then
+      result = { root_pane = { pane_id = "w0:tab" } }
+    elseif args[1] == "workspace" then
+      result = { root_pane = { pane_id = "w1:root" } }
+    else
+      result = { agent = { pane_id = "w1:root", name = "reviewer", agent = "codex" } }
+    end
+    callback(vim.json.encode({ result = result }), nil)
+    return { kill = function() end }
+  end
+
+  local pane_ids = {}
+  herdr.create_pane({}, "split", { cwd = "/project", direction = "down" }, function(pane, err)
+    truthy(pane, err)
+    pane_ids[#pane_ids + 1] = pane.pane_id
+  end)
+  herdr.create_pane({}, "tab", {
+    cwd = "/project",
+    workspace_id = "w0",
+    label = "review",
+  }, function(pane, err)
+    truthy(pane, err)
+    pane_ids[#pane_ids + 1] = pane.pane_id
+  end)
+  herdr.create_pane({}, "workspace", { cwd = "/project", label = "review" }, function(pane, err)
+    truthy(pane, err)
+    pane_ids[#pane_ids + 1] = pane.pane_id
+  end)
+  local started
+  herdr.start_agent({}, "reviewer", "codex", "w1:root", {
+    timeout_ms = 30000,
+    args = { "--model", "fast" },
+  }, function(agent, err)
+    truthy(agent, err)
+    started = agent
+  end)
+  herdr.run = original_run
+
+  eq({ "w0:split", "w0:tab", "w1:root" }, pane_ids)
+  eq("reviewer", started.name)
+  eq({ "pane", "split", "--current", "--direction", "down", "--cwd", "/project", "--no-focus" }, seen[1])
+  eq({
+    "tab",
+    "create",
+    "--workspace",
+    "w0",
+    "--cwd",
+    "/project",
+    "--label",
+    "review",
+    "--no-focus",
+  }, seen[2])
+  eq({ "workspace", "create", "--cwd", "/project", "--label", "review", "--no-focus" }, seen[3])
+  eq({
+    "agent",
+    "start",
+    "reviewer",
+    "--kind",
+    "codex",
+    "--pane",
+    "w1:root",
+    "--timeout",
+    "30000",
+    "--",
+    "--model",
+    "fast",
+  }, seen[4])
+end)
+
+test("decodes structured Herdr startup errors", function()
+  local original_run = herdr.run
+  herdr.run = function(_, _, callback)
+    callback(nil, vim.json.encode({ error = { code = "timeout", message = "startup timed out" } }))
+  end
+  local startup_err
+  herdr.start_agent({}, "reviewer", "codex", "w0:p9", {}, function(_, err)
+    startup_err = err
+  end)
+  herdr.run = original_run
+  eq({ code = "timeout", message = "startup timed out" }, startup_err)
+end)
+
+test("delegates a composer bundle through placement, launch, prompt, and tracking", function()
+  local delegate = require("herdr-context.delegate")
+  local original_snapshot = herdr.snapshot
+  local original_create = herdr.create_pane
+  local original_start = herdr.start_agent
+  local original_stage = transport.stage
+  local original_select = vim.ui.select
+  local old_workspace = vim.env.HERDR_WORKSPACE_ID
+  vim.env.HERDR_WORKSPACE_ID = "w0"
+  state._reset()
+  targets.clear()
+  config.setup({ remember_target = "session", presence = { enabled = false } })
+  local calls = {}
+  vim.ui.select = function(items, opts, callback)
+    calls[#calls + 1] = opts.prompt
+    callback(items[2])
+  end
+  herdr.snapshot = function(_, callback)
+    callback({ agents = { { name = "reviewer" } } })
+  end
+  local create_callback
+  herdr.create_pane = function(_, placement, opts, callback)
+    calls[#calls + 1] = { placement = placement, opts = opts }
+    create_callback = callback
+  end
+  local start_attempts = 0
+  herdr.start_agent = function(_, name, kind, pane_id, opts, callback)
+    calls[#calls + 1] = { name = name, kind = kind, pane_id = pane_id, opts = opts }
+    start_attempts = start_attempts + 1
+    if start_attempts == 1 then
+      callback(nil, { code = "agent_name_taken", message = "name taken" })
+      return
+    end
+    callback({ pane_id = pane_id, workspace_id = "w0", tab_id = "w0:t2", name = name, agent = kind })
+  end
+  transport.stage = function(_, target, payload, callback, opts)
+    calls[#calls + 1] = { target = target, payload = payload, opts = opts }
+    callback(true, nil, {
+      mode = "agent_prompt",
+      submitted = true,
+      tracked = true,
+      status = "done",
+      agent = vim.tbl_extend("force", target, { agent_status = "done" }),
+    })
+  end
+  local result, result_err
+  local committed = 0
+  local operation = { cwd = "/project", payload = "review this context" }
+  delegate.execute(operation, {
+    kind = "codex",
+    preset = "review",
+    startup_timeout_ms = 45000,
+    timeout_ms = 120000,
+    on_committed = function()
+      committed = committed + 1
+    end,
+  }, function(value, err)
+    result, result_err = value, err
+  end)
+  operation.payload = "mutated after delegation started"
+  create_callback({ pane_id = "w0:p9", workspace_id = "w0", tab_id = "w0:t2" })
+  herdr.snapshot = original_snapshot
+  herdr.create_pane = original_create
+  herdr.start_agent = original_start
+  transport.stage = original_stage
+  vim.ui.select = original_select
+  vim.env.HERDR_WORKSPACE_ID = old_workspace
+
+  truthy(result, result_err)
+  eq({ "Create delegated agent in:", "After submitting context:" }, { calls[1], calls[2] })
+  eq("tab", calls[3].placement)
+  eq("w0", calls[3].opts.workspace_id)
+  eq("review", calls[3].opts.label)
+  eq("reviewer-2", calls[4].name)
+  eq("codex", calls[4].kind)
+  eq("w0:p9", calls[4].pane_id)
+  eq(45000, calls[4].opts.timeout_ms)
+  eq("reviewer-3", calls[5].name)
+  eq("w0:p9", calls[5].pane_id)
+  eq("review this context", calls[6].payload)
+  eq({ submit = true, wait = true, timeout_ms = 120000 }, calls[6].opts)
+  eq(1, committed)
+  eq(2, start_attempts)
+  eq("done", result.transport.status)
+  eq("w0:p9", state.get().target_pane_id)
+  targets.clear()
+end)
+
+test("reports cancellation and each delegation side-effect failure", function()
+  local delegate = require("herdr-context.delegate")
+  local original_snapshot = herdr.snapshot
+  local original_create = herdr.create_pane
+  local original_start = herdr.start_agent
+  local original_stage = transport.stage
+  local original_select = vim.ui.select
+  local operation = { cwd = "/project", payload = "context" }
+  config.setup({ remember_target = "none", presence = { enabled = false } })
+  herdr.snapshot = function(_, callback)
+    callback({ agents = {} })
+  end
+
+  local created = false
+  vim.ui.select = function(_, _, callback)
+    callback(nil)
+  end
+  herdr.create_pane = function()
+    created = true
+  end
+  local _, err
+  delegate.execute(operation, { kind = "codex" }, function(value, value_err)
+    _, err = value, value_err
+  end)
+  eq(false, created)
+  eq("Delegation cancelled", err)
+
+  local placement_callback
+  local cancelled = false
+  vim.ui.select = function(_, _, callback)
+    placement_callback = callback
+  end
+  delegate.execute(operation, {
+    kind = "codex",
+    cancelled = function()
+      return cancelled
+    end,
+  }, function(_, value_err)
+    err = value_err
+  end)
+  cancelled = true
+  placement_callback(delegate.placements[1])
+  eq(false, created)
+  eq("Delegation cancelled", err)
+
+  herdr.create_pane = function(_, _, _, callback)
+    callback(nil, "layout busy")
+  end
+  delegate.execute(operation, { kind = "codex", placement = "split", wait = false }, function(_, value_err)
+    err = value_err
+  end)
+  contains(err, "Could not create delegation pane")
+
+  herdr.create_pane = function(_, _, _, callback)
+    callback({ pane_id = "w0:p9" })
+  end
+  local start_calls = 0
+  herdr.start_agent = function(_, _, _, _, _, callback)
+    start_calls = start_calls + 1
+    callback(nil, { code = "timeout", message = "startup timed out" })
+  end
+  delegate.execute(operation, { kind = "codex", placement = "split", wait = false }, function(_, value_err)
+    err = value_err
+  end)
+  contains(err, "Created pane w0:p9")
+  contains(err, "any launched process were retained")
+  eq(1, start_calls)
+
+  herdr.start_agent = function(_, name, kind, pane_id, _, callback)
+    callback({ pane_id = pane_id, name = name, agent = kind })
+  end
+  transport.stage = function(_, _, _, callback)
+    callback(false, "Could not submit context")
+  end
+  delegate.execute(operation, { kind = "codex", placement = "split", wait = false }, function(_, value_err)
+    err = value_err
+  end)
+  contains(err, "Started reviewer in pane w0:p9")
+  contains(err, "the agent was retained")
+
+  herdr.snapshot = original_snapshot
+  herdr.create_pane = original_create
+  herdr.start_agent = original_start
+  transport.stage = original_stage
+  vim.ui.select = original_select
+  targets.clear()
+end)
+
+test("records and previews non-cancelling delegation tracking outcomes", function()
+  local delegate = require("herdr-context.delegate")
+  local history = require("herdr-context.history")
+  local preview = require("herdr-context.ui.preview")
+  local original_open = preview.open
+  local previewed
+  preview.open = function(agent)
+    previewed = agent
+  end
+  config.setup({ history = { enabled = true, max_entries = 20 }, presence = { enabled = false } })
+  history._reset()
+  local target = { pane_id = "w0:p9", name = "reviewer", agent = "codex" }
+  delegate._complete({
+    payload = "frozen payload",
+    bytes = 14,
+    providers = { "hunk", "diagnostics" },
+    instruction = "Review this",
+    preset = "review",
+  }, { preview_result = true }, {
+    agent = target,
+    name = "reviewer",
+    placement = "tab",
+    transport = {
+      mode = "agent_prompt",
+      submitted = true,
+      tracked = true,
+      tracking_error = { code = "timeout", message = "timed out" },
+      tracking_message = "task is still running",
+    },
+  })
+  truthy(vim.wait(100, function()
+    return previewed ~= nil
+  end))
+  preview.open = original_open
+  eq("w0:p9", previewed.pane_id)
+  local recorded = history.get()[1]
+  eq("delegate", recorded.kind)
+  eq("frozen payload", recorded.payload)
+  eq(true, recorded.submitted)
+  eq(true, recorded.tracked)
+  eq("tab", recorded.placement)
+end)
+
 test("reads agent output metadata through the socket API", function()
   local request
   local read
@@ -2288,6 +2597,24 @@ test("opens the prompt editor with an exact Visual selection attached", function
   delete_buffer(source)
 end)
 
+test("opens delegation in the composer with a new-agent destination", function()
+  config.setup({ presence = { enabled = false } })
+  local source = buffer({ "local answer = 42" }, vim.fn.getcwd() .. "/lua/delegate-test.lua")
+  vim.api.nvim_set_current_buf(source)
+  local session = require("herdr-context").delegate({
+    kind = "codex",
+    preset = "review",
+    placement = "split",
+    wait = false,
+  })
+  truthy(session)
+  eq("review", session.preset)
+  eq("new codex agent", session.target_label)
+  eq("function", type(session.stage_handler))
+  session:close()
+  delete_buffer(source)
+end)
+
 test("marks composer payloads stale and renders exact preview in a native scratch buffer", function()
   local bundle = require("herdr-context.bundle")
   local composer = require("herdr-context.composer")
@@ -2478,6 +2805,7 @@ test("registers all user commands", function()
     "HerdrContextDiagnostics",
     "HerdrContextCompose",
     "HerdrContextPrompt",
+    "HerdrContextDelegate",
     "HerdrContextSymbol",
     "HerdrContextHunk",
     "HerdrContextQuickfix",
@@ -2490,6 +2818,19 @@ test("registers all user commands", function()
   }) do
     eq(2, vim.fn.exists(":" .. name), name)
   end
+end)
+
+test("parses the delegate command kind and preset", function()
+  local api = require("herdr-context")
+  local original_delegate = api.delegate
+  local seen
+  api.delegate = function(opts)
+    seen = opts
+  end
+  vim.cmd("HerdrContextDelegate codex review")
+  api.delegate = original_delegate
+  eq("codex", seen.kind)
+  eq("review", seen.preset)
 end)
 
 print(("1..%d"):format(total))

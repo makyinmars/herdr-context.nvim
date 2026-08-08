@@ -125,6 +125,7 @@ herdr plugin link /path/to/herdr-context.nvim
 | `:HerdrContextDiagnostics` | Stage diagnostics for the current line or selection |
 | `:HerdrContextCompose [preset]` | Collect, preview, and stage a combined context bundle |
 | `:HerdrContextPrompt` | Open directly in the message editor with the current line or Visual selection attached |
+| `:HerdrContextDelegate <kind> [preset]` | Create an agent and delegate a reviewed composer bundle |
 | `:HerdrContextSymbol` | Stage the innermost symbol under the cursor |
 | `:HerdrContextHunk` | Stage the Git hunk under the cursor |
 | `:HerdrContextQuickfix` | Stage the current quickfix list |
@@ -309,6 +310,37 @@ require("herdr-context").prompt({
 Ordinary `<C-Enter>` remains a short-lived send and does not wait. A tracked `blocked` result focuses
 the agent and opens its output; `idle` and `done` notify completion. A tracking timeout or
 `agent_prompt_stalled` warning does not cancel the remote task, which may continue running.
+
+### Delegating to a new agent
+
+`:HerdrContextDelegate codex review` opens the composer with the `review` preset and a new Codex agent
+as its destination. After reviewing the exact bundle and pressing `s` or `S`, choose whether to split
+the current tab, create a tab, or create a workspace, then choose whether to send without waiting or
+wait and preview the result. Herdr creates an unfocused shell pane, starts a uniquely named `reviewer`
+with `agent start`, selects it as the context target, and submits the bundle with `agent prompt`.
+
+Lua callers can bypass either picker and customize startup:
+
+```lua
+require("herdr-context").delegate({
+  kind = "codex",
+  preset = "review",
+  name = "reviewer", -- receives a numeric suffix when already live
+  placement = "tab", -- "split", "tab", or "workspace"; omit to ask
+  direction = "right", -- split placement only
+  wait = true, -- omit to ask
+  timeout_ms = 120000,
+  startup_timeout_ms = 30000,
+  preview_result = true,
+  agent_args = { "--model", "fast" }, -- passed after `agent start ... --`
+})
+```
+
+Cancelling either choice leaves the composer open. Accepting both choices freezes the reviewed bundle
+and closes the composer before any side effect; optional lifecycle tracking then continues in the
+background. Post-creation failures identify the retained pane or agent instead of deleting it or
+blindly retrying. An `agent_name_taken` race retries a unique name in the same pane, while startup and
+prompt timeouts are reported without cancelling or duplicating the remote process.
 
 Normal mode selects the innermost symbol, the hunk under the cursor, and diagnostics scoped to the
 symbol (then the hunk). If neither symbol nor hunk is available, it selects the current line. Visual

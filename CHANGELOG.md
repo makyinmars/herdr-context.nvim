@@ -4,6 +4,7 @@ All notable changes to `herdr-context.nvim` are documented here.
 
 ## Unreleased
 
+- Add `:HerdrContextDelegate <kind> [preset]` to review a composer bundle, create a split/tab/workspace agent, start and prompt it, and optionally wait for and preview its result.
 - Add `:HerdrContextExplainAgent` and drawer `e` to inspect Herdr's authoritative detection rules, evidence, lifecycle authority, fallback reasons, and manifest versions.
 - Rank and scope targets with Herdr worktree provenance, add project scope, and migrate remembered or pinned targets when pane moves change their IDs.
 - Add opt-in `prompt({ wait = true })` lifecycle tracking with completion/blocked handling, optional result previews, and non-cancelling timeout/stall reporting.

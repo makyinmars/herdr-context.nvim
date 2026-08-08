@@ -68,6 +68,14 @@ local function decode_response(output)
   return decoded
 end
 
+local function decode_error(err)
+  local ok, decoded = pcall(vim.json.decode, err or "")
+  if ok and type(decoded) == "table" and type(decoded.error) == "table" then
+    return decoded.error
+  end
+  return err
+end
+
 local function json_command(config, args, callback)
   if callback then
     return M.run(config, args, function(output, err)
@@ -145,6 +153,71 @@ function M.explain_agent(config, target, callback)
     end)
   end
   return unwrap(json_command(config, { "agent", "explain", target, "--json" }))
+end
+
+function M.create_pane(config, placement, opts, callback)
+  opts = opts or {}
+  local args
+  local pane_field
+  if placement == "split" then
+    args = { "pane", "split", "--current", "--direction", opts.direction or "right" }
+    pane_field = "pane"
+  elseif placement == "tab" then
+    args = { "tab", "create" }
+    if opts.workspace_id then
+      vim.list_extend(args, { "--workspace", opts.workspace_id })
+    end
+    pane_field = "root_pane"
+  elseif placement == "workspace" then
+    args = { "workspace", "create" }
+    pane_field = "root_pane"
+  else
+    return callback(nil, "Unknown delegation placement: " .. tostring(placement))
+  end
+  if opts.cwd then
+    vim.list_extend(args, { "--cwd", opts.cwd })
+  end
+  if placement ~= "split" and opts.label then
+    vim.list_extend(args, { "--label", opts.label })
+  end
+  args[#args + 1] = "--no-focus"
+
+  return json_command(config, args, function(decoded, err)
+    if not decoded then
+      callback(nil, decode_error(err))
+      return
+    end
+    local pane = decoded.result and decoded.result[pane_field] or decoded[pane_field]
+    if type(pane) ~= "table" or not pane.pane_id then
+      callback(nil, "Herdr pane creation response did not contain a pane")
+      return
+    end
+    callback(pane)
+  end)
+end
+
+function M.start_agent(config, name, kind, pane_id, opts, callback)
+  opts = opts or {}
+  local args = { "agent", "start", name, "--kind", kind, "--pane", pane_id }
+  if opts.timeout_ms then
+    vim.list_extend(args, { "--timeout", tostring(opts.timeout_ms) })
+  end
+  if opts.args and #opts.args > 0 then
+    args[#args + 1] = "--"
+    vim.list_extend(args, opts.args)
+  end
+  return json_command(config, args, function(decoded, err)
+    if not decoded then
+      callback(nil, decode_error(err))
+      return
+    end
+    local agent = decoded.result and decoded.result.agent or decoded.agent
+    if type(agent) ~= "table" or not agent.pane_id then
+      callback(nil, "Herdr agent start response did not contain result.agent")
+      return
+    end
+    callback(agent)
+  end)
 end
 
 function M.read_agent(config, pane_id, opts, callback)

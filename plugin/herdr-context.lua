@@ -43,6 +43,23 @@ end, {
   range = true,
 })
 
+vim.api.nvim_create_user_command("HerdrContextDelegate", function(args)
+  local values = vim.split(args.args, "%s+", { trimempty = true })
+  if #values > 2 then
+    error("HerdrContextDelegate accepts an agent kind and optional composer preset")
+  end
+  require("herdr-context").delegate({
+    kind = values[1],
+    preset = values[2],
+    line1 = args.range > 0 and args.line1 or nil,
+    line2 = args.range > 0 and args.line2 or nil,
+  })
+end, {
+  desc = "Create a new Herdr agent and delegate the current context",
+  range = true,
+  nargs = "+",
+})
+
 vim.api.nvim_create_user_command("HerdrContextSymbol", function()
   require("herdr-context").symbol()
 end, { desc = "Stage the current symbol in a Herdr agent prompt" })

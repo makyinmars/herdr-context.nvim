@@ -135,6 +135,53 @@ function M.prompt(opts)
   return require("herdr-context.composer").open(opts)
 end
 
+function M.delegate(opts)
+  opts = opts or {}
+  vim.validate({
+    opts = { opts, "table" },
+    kind = { opts.kind, "string" },
+    name = { opts.name, "string", true },
+    preset = { opts.preset, "string", true },
+    placement = { opts.placement, "string", true },
+    direction = { opts.direction, "string", true },
+    wait = { opts.wait, "boolean", true },
+    timeout_ms = { opts.timeout_ms, "number", true },
+    startup_timeout_ms = { opts.startup_timeout_ms, "number", true },
+    preview_result = { opts.preview_result, "boolean", true },
+    agent_args = { opts.agent_args, "table", true },
+  })
+  if opts.kind == "" then
+    error("herdr-context: delegate kind must not be empty")
+  end
+  if opts.placement and not vim.tbl_contains({ "split", "tab", "workspace" }, opts.placement) then
+    error("herdr-context: delegate placement must be split, tab, or workspace")
+  end
+  if opts.direction and not vim.tbl_contains({ "right", "down" }, opts.direction) then
+    error("herdr-context: delegate direction must be right or down")
+  end
+  if opts.timeout_ms and (opts.timeout_ms <= 0 or opts.timeout_ms % 1 ~= 0) then
+    error("herdr-context: delegate timeout_ms must be a positive integer")
+  end
+  if opts.timeout_ms and opts.wait == false then
+    error("herdr-context: delegate timeout_ms requires wait = true or an interactive tracking choice")
+  end
+  if
+    opts.startup_timeout_ms
+    and (opts.startup_timeout_ms <= 3000 or opts.startup_timeout_ms > 300000 or opts.startup_timeout_ms % 1 ~= 0)
+  then
+    error("herdr-context: delegate startup_timeout_ms must be greater than 3000 and at most 300000")
+  end
+  if opts.agent_args and not vim.islist(opts.agent_args) then
+    error("herdr-context: delegate agent_args must be a list")
+  end
+  for _, arg in ipairs(opts.agent_args or {}) do
+    if type(arg) ~= "string" then
+      error("herdr-context: delegate agent_args entries must be strings")
+    end
+  end
+  return require("herdr-context.delegate").open(opts)
+end
+
 function M.symbol(opts)
   return require("herdr-context.composer").stage_provider("symbol", opts)
 end
