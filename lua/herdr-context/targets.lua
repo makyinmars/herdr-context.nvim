@@ -13,18 +13,28 @@ local function normalize(path)
   return vim.fs.normalize(vim.fn.fnamemodify(path, ":p")):gsub("/+$", "")
 end
 
-local function same_project(agent_cwd, current_root, current_cwd)
+local function same_git_root(agent_cwd, current_root)
   agent_cwd = normalize(agent_cwd)
   current_root = normalize(current_root)
-  current_cwd = normalize(current_cwd)
   if not agent_cwd then
     return false
   end
-  if current_cwd and agent_cwd == current_cwd then
-    return true
-  end
   local agent_root = context.find_git_root(agent_cwd)
   return agent_root and current_root and normalize(agent_root) == current_root
+end
+
+local function same_worktree(a, b)
+  return a and b and normalize(a.checkout_path) and normalize(a.checkout_path) == normalize(b.checkout_path)
+end
+
+local function same_repository(a, b)
+  if not a or not b then
+    return false
+  end
+  if a.repo_key and b.repo_key then
+    return a.repo_key == b.repo_key
+  end
+  return normalize(a.repo_root) and normalize(a.repo_root) == normalize(b.repo_root)
 end
 
 local status_rank = {
@@ -35,11 +45,13 @@ local status_rank = {
   unknown = 5,
 }
 
-local function scope_allows(agent, scope, current)
+local function scope_allows(agent, scope, current, agent_rank)
   if scope == "tab" then
     return current.tab_id and agent.tab_id == current.tab_id
   elseif scope == "workspace" then
     return current.workspace_id and agent.workspace_id == current.workspace_id
+  elseif scope == "project" then
+    return agent_rank <= 6
   end
   return true
 end
@@ -49,10 +61,16 @@ local function rank(agent, current)
     return 1
   elseif current.workspace_id and agent.workspace_id == current.workspace_id then
     return 2
-  elseif same_project(agent.foreground_cwd or agent.cwd, current.git_root, current.cwd) then
+  elseif same_worktree(agent.worktree, current.worktree) then
     return 3
+  elseif same_repository(agent.worktree, current.worktree) then
+    return 4
+  elseif normalize(agent.foreground_cwd or agent.cwd) == normalize(current.cwd) then
+    return 5
+  elseif same_git_root(agent.foreground_cwd or agent.cwd, current.git_root) then
+    return 6
   end
-  return 4
+  return 7
 end
 
 local function labels_by_id(records, id_key)
@@ -61,6 +79,14 @@ local function labels_by_id(records, id_key)
     labels[item[id_key]] = item.label
   end
   return labels
+end
+
+local function records_by_id(records, id_key)
+  local result = {}
+  for _, item in ipairs(records or {}) do
+    result[item[id_key]] = item
+  end
+  return result
 end
 
 function M.candidates(snapshot, opts)
@@ -73,20 +99,21 @@ function M.candidates(snapshot, opts)
   }
   current.git_root = opts.git_root or context.find_git_root(current.cwd)
 
+  local workspaces_by_id = records_by_id(snapshot.workspaces, "workspace_id")
+  current.worktree = opts.worktree or (workspaces_by_id[current.workspace_id] or {}).worktree
   local workspace_labels = labels_by_id(snapshot.workspaces, "workspace_id")
   local tab_labels = labels_by_id(snapshot.tabs, "tab_id")
   local candidates = {}
   for _, source in ipairs(snapshot.agents or {}) do
-    if
-      source.pane_id
-      and source.pane_id ~= current.pane_id
-      and scope_allows(source, opts.scope or "workspace", current)
-    then
+    if source.pane_id and source.pane_id ~= current.pane_id then
       local agent = vim.deepcopy(source)
+      agent.worktree = agent.worktree or (workspaces_by_id[agent.workspace_id] or {}).worktree
       agent.rank = rank(agent, current)
-      agent.workspace_label = workspace_labels[agent.workspace_id] or agent.workspace_id or "?"
-      agent.tab_label = tab_labels[agent.tab_id] or agent.tab_id or "?"
-      candidates[#candidates + 1] = agent
+      if scope_allows(agent, opts.scope or "workspace", current, agent.rank) then
+        agent.workspace_label = workspace_labels[agent.workspace_id] or agent.workspace_id or "?"
+        agent.tab_label = tab_labels[agent.tab_id] or agent.tab_id or "?"
+        candidates[#candidates + 1] = agent
+      end
     end
   end
 
@@ -193,6 +220,43 @@ function M.remember(config, target)
     return write_pinned(vim.env.HERDR_WORKSPACE_ID, target.pane_id)
   end
   return true
+end
+
+local function migrate_pinned(previous_pane_id, pane_id)
+  local path = config_file()
+  if vim.fn.filereadable(path) ~= 1 then
+    return true
+  end
+  local changed = false
+  local lines = vim.fn.readfile(path)
+  for index, line in ipairs(lines) do
+    local workspace, pinned = line:match("^([^\t]+)\t([^\t]+)$")
+    if workspace and pinned == previous_pane_id then
+      lines[index] = workspace .. "\t" .. pane_id
+      changed = true
+    end
+  end
+  if not changed then
+    return true
+  end
+  local ok, err = pcall(vim.fn.writefile, lines, path)
+  if not ok then
+    return nil, "Could not migrate saved target: " .. tostring(err)
+  end
+  return true
+end
+
+function M.migrate(previous_pane_id, target)
+  if not previous_pane_id or type(target) ~= "table" or not target.pane_id then
+    return nil, "Could not migrate target without old and new pane IDs"
+  end
+  if selected and selected.pane_id == previous_pane_id then
+    selected = vim.tbl_extend("force", selected, vim.deepcopy(target))
+  end
+  if state.get().target_pane_id == previous_pane_id then
+    state.set_target(target.pane_id)
+  end
+  return migrate_pinned(previous_pane_id, target.pane_id)
 end
 
 function M.refresh(config, callback)

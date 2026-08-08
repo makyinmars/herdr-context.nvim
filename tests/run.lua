@@ -277,6 +277,106 @@ test("ranks unseen done agents ahead of other equally local targets", function()
   )
 end)
 
+test("ranks and scopes targets with Herdr worktree provenance", function()
+  local root = vim.fn.getcwd()
+  local snapshot = {
+    workspaces = {
+      {
+        workspace_id = "w1",
+        label = "current",
+        worktree = { checkout_path = "/virtual/current", repo_key = "repo-key", repo_root = "/virtual/repo" },
+      },
+      {
+        workspace_id = "w2",
+        label = "same checkout",
+        worktree = { checkout_path = "/virtual/current", repo_key = "repo-key", repo_root = "/virtual/repo" },
+      },
+      {
+        workspace_id = "w3",
+        label = "other worktree",
+        worktree = { checkout_path = "/virtual/other", repo_key = "repo-key", repo_root = "/virtual/repo" },
+      },
+      {
+        workspace_id = "w4",
+        label = "cwd",
+        worktree = { checkout_path = "/unrelated", repo_key = "other", repo_root = "/unrelated" },
+      },
+    },
+    tabs = {},
+    agents = {
+      { pane_id = "w9:p9", workspace_id = "w9", tab_id = "w9:t1", agent = "codex", cwd = "/tmp" },
+      { pane_id = "w5:p1", workspace_id = "w5", tab_id = "w5:t1", agent = "codex", cwd = root .. "/lua" },
+      { pane_id = "w4:p1", workspace_id = "w4", tab_id = "w4:t1", agent = "codex", foreground_cwd = root },
+      { pane_id = "w3:p1", workspace_id = "w3", tab_id = "w3:t1", agent = "codex", cwd = "/tmp" },
+      { pane_id = "w2:p1", workspace_id = "w2", tab_id = "w2:t1", agent = "codex", cwd = "/tmp" },
+      { pane_id = "w1:p2", workspace_id = "w1", tab_id = "w1:t2", agent = "codex", cwd = "/tmp" },
+      { pane_id = "w1:p1", workspace_id = "w1", tab_id = "w1:t1", agent = "codex", cwd = "/tmp" },
+    },
+  }
+  local candidates = targets.candidates(snapshot, {
+    scope = "session",
+    pane_id = "self",
+    workspace_id = "w1",
+    tab_id = "w1:t1",
+    cwd = root,
+  })
+  eq(
+    { "w1:p1", "w1:p2", "w2:p1", "w3:p1", "w4:p1", "w5:p1", "w9:p9" },
+    vim.tbl_map(function(candidate)
+      return candidate.pane_id
+    end, candidates)
+  )
+  local project = targets.candidates(snapshot, {
+    scope = "project",
+    pane_id = "self",
+    workspace_id = "w1",
+    tab_id = "w1:t1",
+    cwd = root,
+  })
+  eq(6, #project)
+  eq("w5:p1", project[#project].pane_id)
+end)
+
+test("migrates selected and pinned targets after pane moves", function()
+  local old_config = vim.env.HERDR_CONTEXT_CONFIG
+  local old_workspace = vim.env.HERDR_WORKSPACE_ID
+  local path = vim.fn.tempname()
+  vim.env.HERDR_CONTEXT_CONFIG = path
+  vim.env.HERDR_WORKSPACE_ID = "w0"
+  targets.clear()
+  state._reset()
+  local cfg = config.setup({ remember_target = "workspace" })
+  truthy(targets.remember(cfg, { pane_id = "w1:old", agent = "codex", workspace_id = "w1" }))
+
+  local changed
+  local group = vim.api.nvim_create_augroup("HerdrContextTargetMigrationTest", { clear = true })
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "HerdrContextTargetChanged",
+    callback = function(args)
+      changed = args.data
+    end,
+  })
+  local ok, err = targets.migrate("w1:old", {
+    pane_id = "w2:new",
+    terminal_id = "terminal-1",
+    workspace_id = "w2",
+    tab_id = "w2:t1",
+    agent = "codex",
+  })
+  truthy(ok, err)
+  eq("w2:new", targets.selected().pane_id)
+  eq("w2:new", state.get().target_pane_id)
+  eq({ pane_id = "w2:new", previous_pane_id = "w1:old" }, changed)
+  eq("w0\tw2:new", table.concat(vim.fn.readfile(path), "\n"))
+
+  vim.api.nvim_del_augroup_by_id(group)
+  targets.clear()
+  vim.fn.delete(path)
+  vim.env.HERDR_CONTEXT_CONFIG = old_config
+  vim.env.HERDR_WORKSPACE_ID = old_workspace
+end)
+
 test("clears a stale remembered pane and resolves a live replacement", function()
   targets.clear()
   local cfg = config.setup({ target_scope = "session", auto_select = true })
@@ -780,7 +880,7 @@ test("applies resource and status events directly to cached state", function()
   eq("terminal-1", current.agents_by_pane["w2:p4"].terminal_id)
   eq(nil, current.agents_by_pane["w2:p4"].foreground_cwd)
   eq({}, current.agents_by_pane["w2:p4"].tokens)
-  eq("w2:p4", current.target_pane_id)
+  eq("w1:p1", current.target_pane_id)
 
   current, err = state._apply_event({
     event = "pane_focused",

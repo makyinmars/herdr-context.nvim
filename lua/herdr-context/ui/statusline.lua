@@ -2,28 +2,10 @@ local M = {}
 
 local config = require("herdr-context.config")
 local state = require("herdr-context.state")
+local targets = require("herdr-context.targets")
 
 local cached = ""
 local subscriber
-
-local function scoped_agents(current, scope)
-  local workspace_id = vim.env.HERDR_WORKSPACE_ID or current.focused_workspace_id
-  local tab_id = vim.env.HERDR_TAB_ID or current.focused_tab_id
-  local pane_id = vim.env.HERDR_PANE_ID
-  local result = {}
-  for _, agent in ipairs(current.agents or {}) do
-    local allowed = not pane_id or pane_id ~= agent.pane_id
-    if scope == "workspace" then
-      allowed = allowed and workspace_id ~= nil and agent.workspace_id == workspace_id
-    elseif scope == "tab" then
-      allowed = allowed and tab_id ~= nil and agent.tab_id == tab_id
-    end
-    if allowed then
-      result[#result + 1] = agent
-    end
-  end
-  return result
-end
 
 function M.render(cfg, current)
   if not cfg.presence.enabled then
@@ -32,7 +14,7 @@ function M.render(cfg, current)
 
   local options = cfg.statusline
   local icons = options.icons
-  local agents = scoped_agents(current, cfg.target_scope)
+  local agents = targets.candidates(current, { scope = cfg.target_scope })
   local count = #agents
   local parts = {}
   if not options.compact and icons.herdr ~= "" then

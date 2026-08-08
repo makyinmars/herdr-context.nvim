@@ -192,7 +192,7 @@ local function validate(opts)
     error("herdr-context: max_payload_bytes must be a positive integer")
   end
 
-  validate_choice("target_scope", opts.target_scope, { "tab", "workspace", "session" })
+  validate_choice("target_scope", opts.target_scope, { "tab", "workspace", "project", "session" })
   validate_choice("remember_target", opts.remember_target, { "none", "session", "workspace" })
   validate_choice("multiline_strategy", opts.multiline_strategy, { "auto", "bracketed_paste", "context_file" })
   validate_choice("agents_view.position", opts.agents_view.position, { "left", "right" })

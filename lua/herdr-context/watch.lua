@@ -4,6 +4,7 @@ local config_module = require("herdr-context.config")
 local herdr = require("herdr-context.herdr")
 local socket = require("herdr-context.socket")
 local state = require("herdr-context.state")
+local targets = require("herdr-context.targets")
 
 local uv = vim.uv or vim.loop
 
@@ -149,6 +150,12 @@ local function refresh_snapshot(opts, done)
           socket_failed(expected_socket_generation)
           return
         end
+        if (event.event == "pane_moved" or event.event == "pane.moved") and event.data and event.data.pane then
+          local _, migrate_err = targets.migrate(event.data.previous_pane_id, event.data.pane)
+          if migrate_err then
+            vim.notify("herdr-context: " .. migrate_err, vim.log.levels.WARN)
+          end
+        end
       end
     end
     public = state.get()
@@ -260,6 +267,12 @@ local function apply_event(message)
   if err then
     debounce_refresh()
     return false
+  end
+  if (message.event == "pane_moved" or message.event == "pane.moved") and message.data and message.data.pane then
+    local _, migrate_err = targets.migrate(message.data.previous_pane_id, message.data.pane)
+    if migrate_err then
+      vim.notify("herdr-context: " .. migrate_err, vim.log.levels.WARN)
+    end
   end
   reconcile_status_clients()
   return true

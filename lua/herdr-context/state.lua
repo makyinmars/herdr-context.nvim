@@ -565,9 +565,6 @@ function M._apply_event(message, meta)
     if data.closed_workspace_id then
       remove_workspace(raw, data.closed_workspace_id)
     end
-    if snapshot.target_pane_id == data.previous_pane_id then
-      snapshot.target_pane_id = data.pane.pane_id
-    end
   elseif event == "pane.focused" then
     local pane = data.pane_id and find_record(raw.panes, "pane_id", data.pane_id) or nil
     if not pane then

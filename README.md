@@ -145,7 +145,7 @@ require("herdr-context").setup({
   submit = false,
   focus_after_send = false,
   max_payload_bytes = 64 * 1024,
-  target_scope = "workspace", -- "tab", "workspace", or "session"
+  target_scope = "workspace", -- "tab", "workspace", "project", or "session"
   remember_target = "session", -- "none", "session", or "workspace"
 
   composer = {
@@ -449,11 +449,19 @@ The shared snapshot supplies live agent and layout metadata. Candidates are rank
 
 1. same tab;
 2. same workspace;
-3. same Git root or working directory;
-4. other agents in the session.
+3. same exact worktree;
+4. another worktree from the same repository;
+5. same working directory;
+6. same Git root;
+7. other agents in the session.
 
-`target_scope` filters that list before ranking. The current Herdr pane is excluded. Pane IDs are used
-internally because labels such as `codex` are not necessarily unique.
+Herdr workspace provenance is preferred for the worktree comparisons. Working-directory and Git-root
+matching remain available as lower-priority signals. `target_scope` filters that list before ranking:
+`"project"` includes the current repository's worktrees and cwd/Git-root matches, while `"tab"`,
+`"workspace"`, and `"session"` retain their narrower or broader meanings. The current Herdr pane is
+excluded. Pane IDs are used internally because labels such as `codex` are not necessarily unique. When
+Herdr changes a workspace-qualified pane ID during a move, the session selection and any persisted
+workspace pins are migrated to the new ID.
 
 The selected pane is still checked against a fresh snapshot before every send. With the default
 `remember_target = "session"`, the picker reopens whenever multiple agents are live instead of silently
