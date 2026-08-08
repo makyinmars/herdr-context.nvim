@@ -18,7 +18,7 @@ local status_icons = {
   idle = "●",
   working = "◉",
   blocked = "!",
-  done = "●",
+  done = "✓",
   unknown = "○",
 }
 
@@ -26,7 +26,7 @@ local status_highlights = {
   idle = "HerdrContextIdle",
   working = "HerdrContextWorking",
   blocked = "HerdrContextBlocked",
-  done = "HerdrContextIdle",
+  done = "HerdrContextDone",
   unknown = "HerdrContextUnknown",
 }
 
@@ -37,6 +37,7 @@ end
 local function setup_highlights()
   for name, link in pairs({
     HerdrContextIdle = "DiagnosticOk",
+    HerdrContextDone = "DiagnosticOk",
     HerdrContextWorking = "DiagnosticInfo",
     HerdrContextBlocked = "DiagnosticError",
     HerdrContextUnknown = "Comment",
@@ -97,12 +98,13 @@ end
 
 local function agent_line(agent, current, options)
   local status = agent.agent_status or "unknown"
+  local status_label = type(agent.state_labels) == "table" and agent.state_labels[status] or nil
   local prefix = current.target_pane_id == agent.pane_id and "▶" or " "
   local parts = {
     prefix,
     status_icons[status] or status_icons.unknown,
-    string.format("%-8s", agent.agent or "agent"),
-    string.format("%-8s", status),
+    string.format("%-8s", agent.display_agent or agent.agent or "agent"),
+    string.format("%-8s", status_label or status),
   }
   if options.show_tab then
     parts[#parts + 1] = agent.tab_label or agent.tab_id or "?"

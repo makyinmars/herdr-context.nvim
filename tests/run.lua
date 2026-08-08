@@ -253,6 +253,30 @@ test("ranks targets by tab, workspace, project, then session", function()
   eq(2, #scoped)
 end)
 
+test("ranks unseen done agents ahead of other equally local targets", function()
+  local snapshot = {
+    workspaces = { { workspace_id = "w1", label = "current" } },
+    tabs = { { tab_id = "w1:t1", label = "api" } },
+    agents = {
+      { pane_id = "w1:p3", workspace_id = "w1", tab_id = "w1:t1", agent = "codex", agent_status = "working" },
+      { pane_id = "w1:p2", workspace_id = "w1", tab_id = "w1:t1", agent = "claude", agent_status = "idle" },
+      { pane_id = "w1:p1", workspace_id = "w1", tab_id = "w1:t1", agent = "amp", agent_status = "done" },
+    },
+  }
+  local candidates = targets.candidates(snapshot, {
+    scope = "workspace",
+    pane_id = "self",
+    workspace_id = "w1",
+    tab_id = "w1:t1",
+  })
+  eq(
+    { "w1:p1", "w1:p2", "w1:p3" },
+    vim.tbl_map(function(item)
+      return item.pane_id
+    end, candidates)
+  )
+end)
+
 test("clears a stale remembered pane and resolves a live replacement", function()
   targets.clear()
   local cfg = config.setup({ target_scope = "session", auto_select = true })
@@ -615,13 +639,13 @@ test("emits status and target User events with event data", function()
   vim.api.nvim_del_augroup_by_id(group)
 end)
 
-test("sends only opted-in agent status notifications", function()
+test("sends only opted-in idle, done, and blocked notifications", function()
   local notifications = require("herdr-context.notifications")
   state._reset()
   config.setup({
     presence = {
       enabled = true,
-      notifications = { idle = true, blocked = false },
+      notifications = { idle = true, done = true, blocked = false },
     },
   })
   notifications.setup()
@@ -635,18 +659,22 @@ test("sends only opted-in agent status notifications", function()
   }
   state._replace(raw, { connected = true, mode = "socket" })
   eq(0, #messages, "initial snapshot must not notify")
+  raw.agents[1].agent_status = "done"
+  state._replace(raw, { connected = true, mode = "socket" })
   raw.agents[1].agent_status = "idle"
   state._replace(raw, { connected = true, mode = "socket" })
   raw.agents[1].agent_status = "blocked"
   state._replace(raw, { connected = true, mode = "socket" })
-  eq(1, #messages)
-  contains(messages[1].message, "Herdr codex (w0:p1) is idle")
+  eq(2, #messages)
+  contains(messages[1].message, "Herdr codex (w0:p1) is done")
   eq(vim.log.levels.INFO, messages[1].level)
+  contains(messages[2].message, "Herdr codex (w0:p1) is idle")
+  eq(vim.log.levels.INFO, messages[2].level)
 
   config.setup({
     presence = {
       enabled = true,
-      notifications = { idle = false, blocked = true },
+      notifications = { idle = false, done = false, blocked = true },
     },
   })
   notifications.setup()
@@ -656,9 +684,9 @@ test("sends only opted-in agent status notifications", function()
   state._replace(raw, { connected = true, mode = "socket" })
   vim.notify = original_notify
   notifications.stop()
-  eq(2, #messages)
-  contains(messages[2].message, "Herdr codex (w0:p1) is blocked")
-  eq(vim.log.levels.WARN, messages[2].level)
+  eq(3, #messages)
+  contains(messages[3].message, "Herdr codex (w0:p1) is blocked")
+  eq(vim.log.levels.WARN, messages[3].level)
 end)
 
 test("decodes fragmented and batched socket messages", function()
@@ -899,6 +927,10 @@ test("renders the statusline entirely from cached state", function()
   eq("Herdr ▶ ● codex · 1", statusline.render(cfg, current))
   agent.agent_status = "working"
   eq("Herdr ▶ ◉ codex · 1", statusline.render(cfg, current))
+  agent.agent_status = "done"
+  agent.display_agent = "reviewer"
+  eq("Herdr ▶ ✓ reviewer · 1", statusline.render(cfg, current))
+  agent.display_agent = nil
   agent.agent_status = "blocked"
   eq("Herdr ! blocked · 1", statusline.render(cfg, current))
   agent.agent_status = "idle"
@@ -968,7 +1000,9 @@ test("renders the drawer with stable pane mappings and actions", function()
         workspace_id = "w0",
         tab_id = "w0:t1",
         agent = "codex",
+        display_agent = "reviewer",
         agent_status = "idle",
+        state_labels = { idle = "ready" },
         cwd = "/tmp/project",
       },
     },
@@ -982,6 +1016,8 @@ test("renders the drawer with stable pane mappings and actions", function()
   local drawer_text = table.concat(vim.api.nvim_buf_get_lines(drawer_buf, 0, -1, false), "\n")
   contains(drawer_text, "project / api")
   contains(drawer_text, "project / web")
+  contains(drawer_text, "reviewer")
+  contains(drawer_text, "ready")
   local mapping = drawer._line_to_pane()
   local p2_line
   for line, pane_id in pairs(mapping) do

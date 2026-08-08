@@ -17,7 +17,7 @@ local function on_status_changed(args)
   local data = args.data or {}
   local status = data.status
   local options = config.get().presence.notifications
-  if status ~= "idle" and status ~= "blocked" then
+  if status ~= "idle" and status ~= "done" and status ~= "blocked" then
     return
   end
   if not options[status] then

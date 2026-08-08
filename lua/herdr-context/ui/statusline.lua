@@ -68,7 +68,7 @@ function M.render(cfg, current)
     else
       parts[#parts + 1] = icons.target
       parts[#parts + 1] = icons[status] or icons.unknown
-      parts[#parts + 1] = target.agent or "agent"
+      parts[#parts + 1] = target.display_agent or target.agent or "agent"
     end
   elseif count == 0 or options.show_target then
     parts[#parts + 1] = icons.unknown

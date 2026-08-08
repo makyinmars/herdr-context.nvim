@@ -215,6 +215,7 @@ require("herdr-context").setup({
     debounce_ms = 100,
     notifications = {
       idle = false,
+      done = false,
       blocked = false,
     },
   },
@@ -242,7 +243,7 @@ require("herdr-context").setup({
       idle = "●",
       working = "◉",
       blocked = "!",
-      done = "●",
+      done = "✓",
       unknown = "○",
       disconnected = "×",
       separator = "·",
@@ -396,8 +397,8 @@ The adjacent preview uses `agents_view.preview_width`, while `agents_view.previe
 requested history. Press `r` inside the output pane to refresh it.
 
 The `presence.notifications` flags opt into desktop-visible Neovim notifications when an existing
-agent transitions to `idle` or `blocked`. Initial snapshots do not notify, and both transitions are
-disabled by default.
+agent transitions to `idle`, unseen `done`, or `blocked`. Initial snapshots do not notify, and all
+transitions are disabled by default.
 
 Advanced consumers can read or subscribe to immutable snapshots:
 

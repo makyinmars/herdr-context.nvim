@@ -4,6 +4,7 @@ local status_icons = {
   idle = "●",
   working = "◉",
   blocked = "!",
+  done = "✓",
   unknown = "○",
 }
 
@@ -16,10 +17,11 @@ end
 
 function M.format_item(target)
   local status = target.agent_status or "unknown"
+  local status_label = type(target.state_labels) == "table" and target.state_labels[status] or nil
   return ("%s %-8s %-8s %s / %s   %s   %s"):format(
     status_icons[status] or "○",
-    status,
-    target.agent or "agent",
+    status_label or status,
+    target.display_agent or target.agent or "agent",
     target.workspace_label or target.workspace_id or "?",
     target.tab_label or target.tab_id or "?",
     shorten(target.foreground_cwd or target.cwd),

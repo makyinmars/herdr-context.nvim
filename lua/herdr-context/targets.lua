@@ -28,10 +28,11 @@ local function same_project(agent_cwd, current_root, current_cwd)
 end
 
 local status_rank = {
-  idle = 1,
-  blocked = 2,
-  working = 3,
-  unknown = 4,
+  done = 1,
+  idle = 2,
+  blocked = 3,
+  working = 4,
+  unknown = 5,
 }
 
 local function scope_allows(agent, scope, current)
