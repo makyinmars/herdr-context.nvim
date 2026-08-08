@@ -574,6 +574,185 @@ test("normalizes state and returns immutable public snapshots", function()
   eq("codex", state.get().agents_by_pane["w0:pB"].agent)
 end)
 
+test("applies resource and status events directly to cached state", function()
+  state._reset()
+  state._replace({
+    version = "0.8.0",
+    focused_workspace_id = "w1",
+    focused_tab_id = "w1:t1",
+    workspaces = {
+      { workspace_id = "w1", label = "one", active_tab_id = "w1:t1", focused = true },
+      { workspace_id = "w2", label = "two", active_tab_id = "w2:t1", focused = false },
+    },
+    tabs = {
+      { tab_id = "w1:t1", workspace_id = "w1", label = "main", focused = true },
+      { tab_id = "w1:t2", workspace_id = "w1", label = "next", focused = false },
+      { tab_id = "w2:t1", workspace_id = "w2", label = "other" },
+    },
+    panes = {
+      {
+        pane_id = "w1:p1",
+        terminal_id = "terminal-1",
+        workspace_id = "w1",
+        tab_id = "w1:t1",
+        agent = "codex",
+        agent_status = "working",
+        foreground_cwd = "/tmp/old",
+        tokens = { issue = "old" },
+        revision = 4,
+      },
+    },
+    agents = {
+      {
+        pane_id = "w1:p1",
+        terminal_id = "terminal-1",
+        workspace_id = "w1",
+        tab_id = "w1:t1",
+        agent = "codex",
+        agent_status = "working",
+        foreground_cwd = "/tmp/old",
+        tokens = { issue = "old" },
+        revision = 4,
+      },
+    },
+  }, { connected = true, stale = false, mode = "socket" })
+  state.set_target("w1:p1")
+
+  local current, err = state._apply_event({
+    event = "pane.agent_status_changed",
+    data = {
+      pane_id = "w1:p1",
+      agent_status = "done",
+      agent = "codex",
+      title = "Reviewing",
+      display_agent = "reviewer",
+      state_labels = { done = "ready" },
+    },
+  })
+  truthy(current, err)
+  eq("done", current.agents_by_pane["w1:p1"].agent_status)
+  eq("reviewer", current.agents_by_pane["w1:p1"].display_agent)
+  current, err = state._apply_event({
+    event = "pane.agent_status_changed",
+    data = { pane_id = "w1:p1", agent_status = "idle", agent = "codex" },
+  })
+  truthy(current, err)
+  eq(nil, current.agents_by_pane["w1:p1"].title)
+  eq(nil, current.agents_by_pane["w1:p1"].display_agent)
+  eq({}, current.agents_by_pane["w1:p1"].state_labels)
+
+  current, err = state._apply_event({
+    event = "pane_agent_detected",
+    data = { pane_id = "w1:p1", workspace_id = "w1", released = true, final_status = "done" },
+  })
+  truthy(current, err)
+  eq(nil, current.agents_by_pane["w1:p1"])
+  eq(nil, current.panes[1].agent)
+  eq("done", current.panes[1].agent_status)
+  current, err = state._apply_event({
+    event = "pane_agent_detected",
+    data = { pane_id = "w1:p1", workspace_id = "w1", released = false, agent = "codex" },
+  })
+  truthy(current, err)
+  eq("codex", current.agents_by_pane["w1:p1"].agent)
+
+  current, err = state._apply_event({
+    event = "pane_moved",
+    data = {
+      previous_pane_id = "w1:p1",
+      previous_workspace_id = "w1",
+      previous_tab_id = "w1:t1",
+      pane = {
+        pane_id = "w2:p4",
+        terminal_id = "terminal-1",
+        workspace_id = "w2",
+        tab_id = "w2:t1",
+        agent = "codex",
+        agent_status = "done",
+        revision = 5,
+      },
+    },
+  })
+  truthy(current, err)
+  eq(nil, current.agents_by_pane["w1:p1"])
+  eq("terminal-1", current.agents_by_pane["w2:p4"].terminal_id)
+  eq(nil, current.agents_by_pane["w2:p4"].foreground_cwd)
+  eq({}, current.agents_by_pane["w2:p4"].tokens)
+  eq("w2:p4", current.target_pane_id)
+
+  current, err = state._apply_event({
+    event = "pane_focused",
+    data = { pane_id = "w2:p4", workspace_id = "w2" },
+  })
+  truthy(current, err)
+  eq("w2:p4", current.focused_pane_id)
+  eq("w2:t1", current.focused_tab_id)
+  eq("w2", current.focused_workspace_id)
+
+  current, err = state._apply_event({
+    event = "workspace_reordered",
+    data = {
+      workspace_ids = { "w2" },
+      workspaces = {
+        { workspace_id = "w2", label = "two", active_tab_id = "w2:t1", focused = true },
+        { workspace_id = "w1", label = "one", active_tab_id = "w1:t1", focused = false },
+      },
+    },
+  })
+  truthy(current, err)
+  eq("w2", current.workspaces[1].workspace_id)
+
+  current, err = state._apply_event({ event = "tab_closed", data = { tab_id = "w1:t1", workspace_id = "w1" } })
+  truthy(current, err)
+  local workspace_one = current.workspaces[2]
+  eq("w1:t2", workspace_one.active_tab_id)
+
+  current, err = state._apply_event({
+    event = "pane_created",
+    data = {
+      pane = {
+        pane_id = "w2:p5",
+        terminal_id = "terminal-2",
+        workspace_id = "w2",
+        tab_id = "w2:t1",
+        agent = "claude",
+        agent_status = "working",
+        revision = 0,
+      },
+    },
+  })
+  truthy(current, err)
+  eq("done", current.workspaces[1].agent_status, "done should outrank working in aggregate state")
+  current, err = state._apply_event({ event = "pane_exited", data = { pane_id = "w2:p5", workspace_id = "w2" } })
+  truthy(current, err)
+  eq(nil, current.agents_by_pane["w2:p5"])
+
+  current, err = state._apply_event({
+    event = "pane_updated",
+    data = {
+      pane = {
+        pane_id = "w2:p4",
+        terminal_id = "terminal-1",
+        workspace_id = "w2",
+        tab_id = "w2:t1",
+        agent = "codex",
+        agent_status = "working",
+        revision = 3,
+      },
+    },
+  })
+  eq(nil, current)
+  contains(err, "revision moved backwards")
+
+  current, err = state._apply_event({ event = "workspace_closed", data = { workspace_id = "w2" } })
+  truthy(current, err)
+  eq(nil, current.agents_by_pane["w2:p4"])
+  eq(0, #current.panes)
+  eq(nil, current.focused_pane_id)
+  eq(nil, current.focused_tab_id)
+  eq(nil, current.focused_workspace_id)
+end)
+
 test("filters cached agents and cleans up state subscribers", function()
   state._reset()
   local updates = 0
@@ -885,7 +1064,161 @@ test("socket request sends an envelope and returns its matching result", functio
   vim.fn.delete(path)
 end)
 
-test("watcher debounces events and falls back to polling", function()
+test("watcher gates only the Herdr 0.8 workspace reorder event", function()
+  state._reset()
+  watch.stop({ silent = true })
+  local old_env = {
+    HERDR_ENV = vim.env.HERDR_ENV,
+    HERDR_SOCKET_PATH = vim.env.HERDR_SOCKET_PATH,
+  }
+  vim.env.HERDR_ENV = "1"
+  vim.env.HERDR_SOCKET_PATH = "/tmp/herdr-context-fake.sock"
+  local writes = {}
+  local function fake_socket_new(opts)
+    local fake = { opts = opts }
+    function fake:connect()
+      self.opts.on_connect()
+    end
+    function fake:write(message)
+      writes[#writes + 1] = message
+      return true
+    end
+    function fake:close() end
+    return fake
+  end
+  local cfg = config.setup({ presence = { enabled = true, socket = true } })
+  watch.start(cfg, {
+    snapshot = function(_, callback)
+      callback({ version = "0.7.5", agents = {}, panes = {}, tabs = {}, workspaces = {} }, nil)
+    end,
+    socket_new = fake_socket_new,
+  })
+  local types = vim.tbl_map(function(subscription)
+    return subscription.type
+  end, writes[1].params.subscriptions)
+  for _, expected in ipairs({ "pane.updated", "pane.focused", "tab.created", "workspace.updated", "layout.updated" }) do
+    truthy(vim.tbl_contains(types, expected), "missing 0.7.5 subscription " .. expected)
+  end
+  truthy(not vim.tbl_contains(types, "workspace.reordered"))
+  watch.stop({ silent = true })
+  vim.env.HERDR_ENV = old_env.HERDR_ENV
+  vim.env.HERDR_SOCKET_PATH = old_env.HERDR_SOCKET_PATH
+end)
+
+test("watcher buffers events across delayed bootstrap and reconnect snapshots", function()
+  state._reset()
+  watch.stop({ silent = true })
+  local old_env = {
+    HERDR_ENV = vim.env.HERDR_ENV,
+    HERDR_SOCKET_PATH = vim.env.HERDR_SOCKET_PATH,
+  }
+  vim.env.HERDR_ENV = "1"
+  vim.env.HERDR_SOCKET_PATH = "/tmp/herdr-context-delayed.sock"
+
+  local raw = {
+    version = "0.8.0",
+    workspaces = { { workspace_id = "w0", label = "project" } },
+    tabs = { { tab_id = "w0:t1", workspace_id = "w0", label = "main" } },
+    panes = {
+      {
+        pane_id = "w0:p1",
+        terminal_id = "terminal-1",
+        workspace_id = "w0",
+        tab_id = "w0:t1",
+        revision = 1,
+      },
+    },
+    agents = {},
+  }
+  local snapshots = {}
+  local sockets = {}
+  local function fake_socket_new(opts)
+    local fake = { opts = opts, writes = {}, closed = false }
+    function fake:connect()
+      self.opts.on_connect()
+    end
+    function fake:write(message)
+      self.writes[#self.writes + 1] = message
+      return true
+    end
+    function fake:close()
+      self.closed = true
+    end
+    sockets[#sockets + 1] = fake
+    return fake
+  end
+  local cfg = config.setup({
+    presence = {
+      enabled = true,
+      socket = true,
+      poll_interval_ms = 1000,
+      reconnect_max_ms = 20,
+      debounce_ms = 10,
+    },
+  })
+  watch.start(cfg, {
+    snapshot = function(_, callback)
+      snapshots[#snapshots + 1] = callback
+    end,
+    socket_new = fake_socket_new,
+  })
+  eq(1, #snapshots)
+  snapshots[1](vim.deepcopy(raw), nil)
+  eq(1, #sockets)
+
+  sockets[1].opts.on_message({ id = sockets[1].writes[1].id, result = { type = "subscription_started" } })
+  eq(2, #snapshots)
+  sockets[1].opts.on_message({
+    event = "pane_updated",
+    data = {
+      pane = {
+        pane_id = "w0:p1",
+        terminal_id = "terminal-1",
+        workspace_id = "w0",
+        tab_id = "w0:t1",
+        title = "during bootstrap",
+        revision = 2,
+      },
+    },
+  })
+  snapshots[2](vim.deepcopy(raw), nil)
+  eq(2, state.get().panes[1].revision)
+  eq("during bootstrap", state.get().panes[1].title)
+
+  sockets[1].opts.on_close("eof")
+  eq(3, #snapshots, "polling snapshot did not start after disconnect")
+  truthy(
+    vim.wait(100, function()
+      return #sockets == 2
+    end),
+    "reconnect did not start while polling snapshot was pending"
+  )
+  sockets[2].opts.on_message({ id = sockets[2].writes[1].id, result = { type = "subscription_started" } })
+  sockets[2].opts.on_message({
+    event = "pane_updated",
+    data = {
+      pane = {
+        pane_id = "w0:p1",
+        terminal_id = "terminal-1",
+        workspace_id = "w0",
+        tab_id = "w0:t1",
+        title = "during reconnect",
+        revision = 3,
+      },
+    },
+  })
+  snapshots[3](vim.deepcopy(raw), nil)
+  eq(4, #snapshots, "post-subscription snapshot was coalesced into an older poll")
+  snapshots[4](vim.deepcopy(raw), nil)
+  eq(3, state.get().panes[1].revision)
+  eq("during reconnect", state.get().panes[1].title)
+
+  watch.stop({ silent = true })
+  vim.env.HERDR_ENV = old_env.HERDR_ENV
+  vim.env.HERDR_SOCKET_PATH = old_env.HERDR_SOCKET_PATH
+end)
+
+test("watcher applies events directly and snapshots only for recovery", function()
   state._reset()
   watch.stop({ silent = true })
   local old_env = {
@@ -899,17 +1232,32 @@ test("watcher debounces events and falls back to polling", function()
 
   local snapshot_count = 0
   local raw = {
-    version = "0.7.5",
-    protocol = 17,
+    version = "0.8.0",
+    protocol = 19,
     focused_workspace_id = "w0",
     focused_tab_id = "w0:t1",
-    agents = {
+    workspaces = { { workspace_id = "w0", label = "project" } },
+    tabs = { { tab_id = "w0:t1", workspace_id = "w0", label = "main" } },
+    panes = {
       {
         pane_id = "w0:p1",
+        terminal_id = "terminal-1",
         workspace_id = "w0",
         tab_id = "w0:t1",
         agent = "codex",
         agent_status = "idle",
+        revision = 1,
+      },
+    },
+    agents = {
+      {
+        pane_id = "w0:p1",
+        terminal_id = "terminal-1",
+        workspace_id = "w0",
+        tab_id = "w0:t1",
+        agent = "codex",
+        agent_status = "idle",
+        revision = 1,
       },
     },
   }
@@ -949,27 +1297,76 @@ test("watcher debounces events and falls back to polling", function()
   eq(1, #sockets)
   eq("events.subscribe", sockets[1].writes[1].method)
   local subscriptions = sockets[1].writes[1].params.subscriptions
-  truthy(vim.tbl_contains(
-    vim.tbl_map(function(item)
-      return item.type .. ":" .. (item.pane_id or "")
-    end, subscriptions),
-    "pane.agent_status_changed:w0:p1"
-  ))
+  local subscription_types = vim.tbl_map(function(item)
+    return item.type
+  end, subscriptions)
+  truthy(vim.tbl_contains(subscription_types, "workspace.reordered"))
+  truthy(not vim.tbl_contains(subscription_types, "pane.agent_status_changed"))
 
   sockets[1].opts.on_message({
     id = sockets[1].writes[1].id,
     result = { type = "subscription_started" },
   })
-  eq(2, snapshot_count)
+  eq(2, snapshot_count, "socket bootstrap did not take an authoritative snapshot")
   eq("socket", state.get().mode)
-  sockets[1].opts.on_message({ event = "pane_agent_status_changed", data = {} })
-  sockets[1].opts.on_message({ event = "pane_agent_status_changed", data = {} })
-  sockets[1].opts.on_message({ event = "pane_closed", data = {} })
+  eq(2, #sockets, "agent status subscription was not created")
+  local status_subscriptions = sockets[2].writes[1].params.subscriptions
+  eq(5, #status_subscriptions)
+  eq({ type = "pane.agent_status_changed", pane_id = "w0:p1", agent_status = "idle" }, status_subscriptions[1])
+
+  sockets[2].opts.on_message({
+    id = sockets[2].writes[1].id,
+    result = { type = "subscription_started" },
+  })
+
+  sockets[2].opts.on_message({
+    event = "pane.agent_status_changed",
+    data = { pane_id = "w0:p1", agent_status = "done", agent = "codex" },
+  })
+  eq("done", state.get().agents_by_pane["w0:p1"].agent_status)
+  eq(2, snapshot_count, "ordinary status event spawned a snapshot")
+
+  sockets[1].opts.on_message({
+    event = "pane_updated",
+    data = {
+      pane = {
+        pane_id = "w0:p1",
+        terminal_id = "terminal-1",
+        workspace_id = "w0",
+        tab_id = "w0:t1",
+        agent = "codex",
+        agent_status = "working",
+        revision = 2,
+      },
+    },
+  })
+  eq("working", state.get().agents_by_pane["w0:p1"].agent_status)
+  eq(2, snapshot_count, "ordinary pane event spawned a snapshot")
+
+  sockets[1].opts.on_message({
+    event = "pane_created",
+    data = {
+      pane = {
+        pane_id = "w0:p2",
+        terminal_id = "terminal-2",
+        workspace_id = "w0",
+        tab_id = "w0:t1",
+        agent = "claude",
+        agent_status = "idle",
+        revision = 0,
+      },
+    },
+  })
+  eq("claude", state.get().agents_by_pane["w0:p2"].agent)
+  eq(3, #sockets, "new agent did not receive a status subscription")
+  eq(2, snapshot_count, "new agent reconnected or spawned a snapshot")
+
+  sockets[1].opts.on_message({ event = "future.unknown", data = {} })
   truthy(
     vim.wait(200, function()
       return snapshot_count == 3
     end),
-    "event burst did not produce one refresh"
+    "unknown event did not produce a recovery snapshot"
   )
 
   sockets[1].opts.on_close("eof")
@@ -981,12 +1378,13 @@ test("watcher debounces events and falls back to polling", function()
   )
   truthy(
     vim.wait(200, function()
-      return #sockets == 2
+      return #sockets >= 4
     end),
     "socket reconnect was not attempted"
   )
-  sockets[2].opts.on_message({
-    id = sockets[2].writes[1].id,
+  local reconnect = sockets[4]
+  reconnect.opts.on_message({
+    id = reconnect.writes[1].id,
     result = { type = "subscription_started" },
   })
   truthy(

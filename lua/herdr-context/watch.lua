@@ -7,32 +7,51 @@ local state = require("herdr-context.state")
 
 local uv = vim.uv or vim.loop
 
-local static_subscriptions = {
+local base_subscriptions = {
   "pane.agent_detected",
   "pane.created",
+  "pane.updated",
   "pane.closed",
   "pane.moved",
   "pane.exited",
+  "pane.focused",
+  "tab.created",
+  "tab.closed",
+  "tab.focused",
   "tab.renamed",
   "tab.moved",
+  "workspace.created",
+  "workspace.updated",
+  "workspace.metadata_updated",
+  "workspace.focused",
   "workspace.renamed",
   "workspace.moved",
   "workspace.closed",
+  "layout.updated",
 }
 
 local active = false
 local generation = 0
+local socket_generation = 0
 local cfg
 local dependencies
 local client
+local status_clients = {}
 local socket_ready = false
-local subscribed_signature
 local debounce_timer
 local poll_timer
 local reconnect_timer
 local reconnect_delay = 500
 local request_number = 0
 local augroup
+local reconcile_status_clients
+local debounce_refresh
+local socket_failed
+local syncing = false
+local event_buffer = {}
+local snapshot_inflight = false
+local sync_followup_pending = false
+local bootstrap_pending = false
 
 local function close_timer(timer)
   if timer then
@@ -53,43 +72,52 @@ local function stop_reconnect()
   reconnect_timer = nil
 end
 
-local function signature(current)
-  local panes = {}
-  for pane_id in pairs(current.agents_by_pane or {}) do
-    panes[#panes + 1] = pane_id
+local function version_at_least(version, major, minor)
+  local current_major, current_minor = tostring(version or ""):match("^(%d+)%.(%d+)")
+  current_major, current_minor = tonumber(current_major), tonumber(current_minor)
+  if not current_major then
+    return false
   end
-  table.sort(panes)
-  return table.concat(panes, "\0")
+  return current_major > major or (current_major == major and current_minor >= minor)
 end
 
-local function subscriptions(current)
+local function subscriptions()
   local result = {}
-  for _, event_type in ipairs(static_subscriptions) do
+  for _, event_type in ipairs(base_subscriptions) do
     result[#result + 1] = { type = event_type }
   end
-  for pane_id in pairs(current.agents_by_pane or {}) do
-    result[#result + 1] = {
-      type = "pane.agent_status_changed",
-      pane_id = pane_id,
-    }
+  if version_at_least(state.get().version, 0, 8) then
+    result[#result + 1] = { type = "workspace.reordered" }
   end
   return result
 end
 
 local connect_socket
 
-local function restart_for_agent_set()
-  if not active or not socket_ready or signature(state.get()) == subscribed_signature then
-    return
+local function socket_requested()
+  return cfg.presence.socket and vim.env.HERDR_SOCKET_PATH and vim.env.HERDR_SOCKET_PATH ~= ""
+end
+
+local function close_status_clients()
+  for pane_id, status_client in pairs(status_clients) do
+    status_client:close({ silent = true, reason = "replace" })
+    status_clients[pane_id] = nil
   end
-  connect_socket(true)
 end
 
 local function refresh_snapshot(opts, done)
+  local expected_generation = generation
+  local expected_socket_generation = socket_generation
+  snapshot_inflight = true
+  if socket_ready and not syncing then
+    syncing = true
+    event_buffer = {}
+  end
   dependencies.snapshot(cfg, function(raw, err)
-    if not active then
+    if not active or expected_generation ~= generation then
       return
     end
+    snapshot_inflight = false
     if not raw then
       state._set_connection({
         connected = socket_ready,
@@ -97,17 +125,43 @@ local function refresh_snapshot(opts, done)
         mode = socket_ready and "socket" or "disconnected",
       })
       done(nil, err)
+      if socket_ready and expected_socket_generation == socket_generation then
+        socket_failed(expected_socket_generation)
+      end
       return
     end
 
     local mode = socket_ready and "socket" or "polling"
+    local defer_socket_sync = socket_ready and sync_followup_pending and not opts.socket_sync
     local _, public = state._replace(raw, {
       connected = true,
-      stale = false,
+      stale = defer_socket_sync,
       mode = mode,
     })
+    if not defer_socket_sync then
+      local buffered = event_buffer
+      event_buffer = {}
+      syncing = false
+      for _, event in ipairs(buffered) do
+        local _, event_err = state._apply_event(event, { connected = true, stale = false, mode = "socket" })
+        if event_err then
+          done(nil, event_err)
+          socket_failed(expected_socket_generation)
+          return
+        end
+      end
+    end
+    public = state.get()
+    local should_connect = bootstrap_pending and socket_requested()
+    if should_connect then
+      bootstrap_pending = false
+    end
     done(public, nil)
-    restart_for_agent_set()
+    if should_connect then
+      connect_socket(false)
+    elseif socket_ready and not defer_socket_sync and reconcile_status_clients then
+      reconcile_status_clients()
+    end
   end)
 end
 
@@ -148,18 +202,21 @@ local function schedule_reconnect()
     vim.schedule(function()
       stop_reconnect()
       if active and not socket_ready then
-        connect_socket()
+        connect_socket(true)
       end
     end)
   end)
 end
 
-local function socket_failed(expected_generation)
-  if not active or expected_generation ~= generation then
+socket_failed = function(expected_socket_generation)
+  if not active or expected_socket_generation ~= socket_generation then
     return
   end
   socket_ready = false
-  subscribed_signature = nil
+  syncing = false
+  event_buffer = {}
+  sync_followup_pending = false
+  close_status_clients()
   if client then
     client:close({ silent = true, reason = "reconnect" })
     client = nil
@@ -173,9 +230,13 @@ local function socket_failed(expected_generation)
   schedule_reconnect()
 end
 
-local function debounce_refresh()
+debounce_refresh = function()
   if not active then
     return
+  end
+  if socket_ready and not syncing then
+    syncing = true
+    event_buffer = {}
   end
   if not debounce_timer then
     debounce_timer = uv.new_timer()
@@ -190,43 +251,134 @@ local function debounce_refresh()
   end)
 end
 
+local function apply_event(message)
+  if syncing then
+    event_buffer[#event_buffer + 1] = message
+    return true
+  end
+  local _, err = state._apply_event(message, { connected = true, stale = false, mode = "socket" })
+  if err then
+    debounce_refresh()
+    return false
+  end
+  reconcile_status_clients()
+  return true
+end
+
+local function connect_status_client(pane_id)
+  request_number = request_number + 1
+  local request_id = "herdr-context:status:" .. tostring(request_number)
+  local expected_socket_generation = socket_generation
+  local status_client
+  status_client = dependencies.socket_new({
+    path = vim.env.HERDR_SOCKET_PATH,
+    on_connect = function()
+      if not active or not socket_ready or expected_socket_generation ~= socket_generation then
+        return
+      end
+      status_client:write({
+        id = request_id,
+        method = "events.subscribe",
+        params = {
+          subscriptions = {
+            { type = "pane.agent_status_changed", pane_id = pane_id, agent_status = "idle" },
+            { type = "pane.agent_status_changed", pane_id = pane_id, agent_status = "working" },
+            { type = "pane.agent_status_changed", pane_id = pane_id, agent_status = "blocked" },
+            { type = "pane.agent_status_changed", pane_id = pane_id, agent_status = "done" },
+            { type = "pane.agent_status_changed", pane_id = pane_id, agent_status = "unknown" },
+          },
+        },
+      })
+    end,
+    on_message = function(message)
+      if not active or not socket_ready or expected_socket_generation ~= socket_generation then
+        return
+      end
+      if message.id == request_id then
+        if message.error or not (message.result and message.result.type == "subscription_started") then
+          status_clients[pane_id] = nil
+          status_client:close({ silent = true, reason = "subscription_failed" })
+          debounce_refresh()
+        end
+        return
+      end
+      if message.event then
+        apply_event(message)
+      end
+    end,
+    on_error = function()
+      if status_clients[pane_id] == status_client then
+        status_clients[pane_id] = nil
+        debounce_refresh()
+      end
+    end,
+    on_close = function()
+      if status_clients[pane_id] == status_client then
+        status_clients[pane_id] = nil
+        debounce_refresh()
+      end
+    end,
+  })
+  status_clients[pane_id] = status_client
+  status_client:connect()
+end
+
+reconcile_status_clients = function()
+  if not active or not socket_ready then
+    return
+  end
+  local current = state.get()
+  for pane_id, status_client in pairs(status_clients) do
+    if not current.agents_by_pane[pane_id] then
+      status_client:close({ silent = true, reason = "agent_removed" })
+      status_clients[pane_id] = nil
+    end
+  end
+  for pane_id in pairs(current.agents_by_pane) do
+    if not status_clients[pane_id] then
+      connect_status_client(pane_id)
+    end
+  end
+end
+
 connect_socket = function(restarting)
   if not active or not cfg.presence.socket or not vim.env.HERDR_SOCKET_PATH then
     return
   end
 
-  generation = generation + 1
-  local current_generation = generation
+  socket_generation = socket_generation + 1
+  local current_socket_generation = socket_generation
   socket_ready = false
+  syncing = true
+  event_buffer = {}
   stop_reconnect()
+  close_status_clients()
   if client then
     client:close({ silent = true, reason = "replace" })
   end
 
-  local current = state.get()
-  subscribed_signature = signature(current)
   start_polling(false)
   request_number = request_number + 1
   local request_id = "herdr-context:" .. tostring(request_number)
   client = dependencies.socket_new({
     path = vim.env.HERDR_SOCKET_PATH,
     on_connect = function()
-      if not active or current_generation ~= generation then
+      if not active or current_socket_generation ~= socket_generation then
         return
       end
       client:write({
         id = request_id,
         method = "events.subscribe",
-        params = { subscriptions = subscriptions(current) },
+        params = { subscriptions = subscriptions() },
       })
     end,
     on_message = function(message)
-      if not active or current_generation ~= generation then
+      if not active or current_socket_generation ~= socket_generation then
         return
       end
       if message.id == request_id then
         if message.error or not (message.result and message.result.type == "subscription_started") then
-          socket_failed(current_generation)
+          socket_failed(current_socket_generation)
           return
         end
         socket_ready = true
@@ -237,18 +389,34 @@ connect_socket = function(restarting)
           stale = true,
           mode = "socket",
         })
-        state.refresh({ force = true }, function() end)
+        local function run_socket_sync()
+          if not active or not socket_ready or current_socket_generation ~= socket_generation then
+            return
+          end
+          sync_followup_pending = false
+          state.refresh({ force = true, socket_sync = true }, function() end)
+        end
+        if snapshot_inflight then
+          sync_followup_pending = true
+          state.refresh({}, function(_, err)
+            if not err then
+              run_socket_sync()
+            end
+          end)
+        else
+          run_socket_sync()
+        end
         return
       end
       if message.event then
-        debounce_refresh()
+        apply_event(message)
       end
     end,
     on_error = function()
-      socket_failed(current_generation)
+      socket_failed(current_socket_generation)
     end,
     on_close = function()
-      socket_failed(current_generation)
+      socket_failed(current_socket_generation)
     end,
   })
   if restarting then
@@ -272,7 +440,12 @@ function M.start(options, opts)
   generation = generation + 1
   reconnect_delay = math.min(500, cfg.presence.reconnect_max_ms)
   socket_ready = false
-  subscribed_signature = nil
+  status_clients = {}
+  syncing = false
+  event_buffer = {}
+  snapshot_inflight = false
+  sync_followup_pending = false
+  bootstrap_pending = socket_requested()
   state._set_enabled(cfg.presence.enabled)
 
   if not cfg.presence.enabled then
@@ -300,10 +473,10 @@ function M.start(options, opts)
     if not active then
       return
     end
-    if cfg.presence.socket and vim.env.HERDR_SOCKET_PATH and vim.env.HERDR_SOCKET_PATH ~= "" then
-      connect_socket()
-    else
-      start_polling(err ~= nil)
+    if err then
+      start_polling(true)
+    elseif not socket_requested() then
+      start_polling(false)
     end
   end)
 end
@@ -313,7 +486,12 @@ function M.stop(opts)
   active = false
   generation = generation + 1
   socket_ready = false
-  subscribed_signature = nil
+  syncing = false
+  event_buffer = {}
+  snapshot_inflight = false
+  sync_followup_pending = false
+  bootstrap_pending = false
+  close_status_clients()
   close_timer(debounce_timer)
   debounce_timer = nil
   stop_polling()

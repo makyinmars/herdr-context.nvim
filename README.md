@@ -421,6 +421,13 @@ State changes emit `User` events named `HerdrContextUpdated`, `HerdrContextTarge
 `HerdrContextAgentStatusChanged`, `HerdrContextConnected`, and `HerdrContextDisconnected`. Relevant
 event details are available through `vim.v.event` and autocmd callback `data`.
 
+Socket presence reads the server version, opens the lifecycle subscription, and takes an authoritative
+snapshot while buffering new events. It then applies pane, tab, workspace, and agent-status events
+directly to the shared cache. New and removed agents gain or lose a dedicated status stream without
+reconnecting the lifecycle subscription. Further full snapshots are reserved for reconnects, explicit
+refreshes, unknown or inconsistent events, and backwards pane revisions. Herdr 0.8-only events such as
+`workspace.reordered` are subscribed only when the snapshot reports a compatible version.
+
 ## Target selection
 
 The shared snapshot supplies live agent and layout metadata. Candidates are ranked by:
