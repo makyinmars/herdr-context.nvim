@@ -246,6 +246,9 @@ local function create_session(request, opts)
     closed = false,
     instruction = opts.instruction or "",
     preset = opts.preset,
+    track = opts.wait == true,
+    tracking_timeout_ms = opts.timeout_ms,
+    preview_result = opts.preview_result == true,
     safety_warnings = {},
     safety_confirmed = false,
   }
@@ -367,6 +370,11 @@ local function create_session(request, opts)
         return
       end
       self.target = target
+      if self.track then
+        notify(
+          ("Submitting context to %s (%s) and tracking its state…"):format(target.agent or "agent", target.pane_id)
+        )
+      end
       transport.stage(config.get(), target, self.bundle.payload, function(ok, err, result)
         if not ok then
           notify(err, vim.log.levels.ERROR)
@@ -383,11 +391,40 @@ local function create_session(request, opts)
           preset = self.preset,
           mode = result.mode,
           submitted = result.submitted,
+          tracked = result.tracked,
+          status = result.status,
         })
-        local action = result.submitted and "Sent" or "Staged"
-        notify(("%s context for %s (%s)%s"):format(action, target.agent or "agent", target.pane_id, suffix))
+        local preview_result = result.tracked and (result.status == "blocked" or self.preview_result)
+        if result.tracking_error then
+          notify(result.tracking_message, vim.log.levels.WARN)
+        elseif result.tracked and result.status == "blocked" then
+          notify(
+            ("Herdr %s (%s) is blocked and needs input"):format(target.agent or "agent", target.pane_id),
+            vim.log.levels.WARN
+          )
+        elseif result.tracked then
+          notify(
+            ("Herdr %s (%s) reached %s"):format(
+              target.agent or "agent",
+              target.pane_id,
+              result.status or "a settled state"
+            )
+          )
+        else
+          local action = result.submitted and "Sent" or "Staged"
+          notify(("%s context for %s (%s)%s"):format(action, target.agent or "agent", target.pane_id, suffix))
+        end
         self:close()
-      end, { submit = stage_opts.submit })
+        if preview_result then
+          vim.schedule(function()
+            require("herdr-context.ui.preview").open(result.agent or target)
+          end)
+        end
+      end, {
+        submit = stage_opts.submit,
+        wait = self.track,
+        timeout_ms = self.tracking_timeout_ms,
+      })
     end)
   end
 

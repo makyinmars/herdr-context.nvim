@@ -59,6 +59,18 @@ local function focus_if_needed(config, target, callback)
   end)
 end
 
+local function prompt_error_message(err)
+  if type(err) ~= "table" then
+    return tostring(err)
+  end
+  if err.code == "timeout" then
+    return "Herdr tracking timed out; the agent task is still running"
+  elseif err.code == "agent_prompt_stalled" then
+    return "Herdr observed no agent state transition after prompting; the task may still start"
+  end
+  return err.message or err.code or vim.inspect(err)
+end
+
 function M.stage(config, target, payload, callback, opts)
   opts = opts or {}
   local submit = opts.submit
@@ -67,15 +79,41 @@ function M.stage(config, target, payload, callback, opts)
   end
 
   if submit then
-    herdr.prompt(config, target.pane_id, payload, function(_, err)
+    herdr.prompt(config, target.pane_id, payload, function(agent, err)
       if err then
-        callback(false, "Could not submit context: " .. err)
+        local result = {
+          mode = "agent_prompt",
+          submitted = err.code == "timeout" or err.code == "agent_prompt_stalled",
+          tracked = opts.wait == true,
+          tracking_error = err,
+          tracking_message = prompt_error_message(err),
+        }
+        if result.submitted then
+          callback(true, nil, result)
+        else
+          callback(false, "Could not submit context: " .. prompt_error_message(err), result)
+        end
         return
       end
-      focus_if_needed(config, target, function(ok, focus_err)
-        callback(ok, focus_err, { mode = "agent_prompt", submitted = true })
+      local tracked = opts.wait == true
+      local status = tracked and agent and agent.agent_status or nil
+      local focus_config = config
+      if status == "blocked" and not config.focus_after_send then
+        focus_config = vim.tbl_extend("force", config, { focus_after_send = true })
+      end
+      focus_if_needed(focus_config, target, function(ok, focus_err)
+        local result = {
+          mode = "agent_prompt",
+          submitted = true,
+        }
+        if tracked then
+          result.tracked = true
+          result.status = status
+          result.agent = agent
+        end
+        callback(ok, focus_err, result)
       end)
-    end)
+    end, { wait = opts.wait, timeout_ms = opts.timeout_ms })
     return
   end
 

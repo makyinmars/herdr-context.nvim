@@ -451,6 +451,108 @@ test("supports an explicit one-shot submission without changing the safe default
   vim.fn.delete(log)
 end)
 
+test("waits for explicit prompts and parses the final agent state", function()
+  local original_run = herdr.run
+  local args
+  herdr.run = function(_, command_args, callback)
+    args = command_args
+    callback(
+      vim.json.encode({
+        id = "cli:agent:prompt",
+        result = {
+          type = "agent_prompted",
+          agent = { pane_id = "w1:p2", agent = "codex", agent_status = "done" },
+        },
+      }),
+      nil,
+      { code = 0 }
+    )
+    return { kill = function() end }
+  end
+  local agent
+  herdr.prompt({}, "w1:p2", "review this", function(value, err)
+    truthy(value, err and err.message)
+    agent = value
+  end, { wait = true, timeout_ms = 120000 })
+  herdr.run = original_run
+  eq({
+    "agent",
+    "prompt",
+    "w1:p2",
+    "review this",
+    "--wait",
+    "--until",
+    "idle",
+    "--until",
+    "done",
+    "--until",
+    "blocked",
+    "--timeout",
+    "120000",
+  }, args)
+  eq("done", agent.agent_status)
+end)
+
+test("treats prompt timeout and stall as non-cancelling tracking outcomes", function()
+  local original_prompt = herdr.prompt
+  local seen_opts
+  herdr.prompt = function(_, _, _, callback, opts)
+    seen_opts = opts
+    callback(nil, { code = "timeout", message = "timed out waiting for agent status" })
+  end
+  local ok, err, result = stage_and_wait({}, { pane_id = "w1:p2", agent = "codex" }, "review", {
+    submit = true,
+    wait = true,
+    timeout_ms = 9000,
+  })
+  truthy(ok, err)
+  eq({ wait = true, timeout_ms = 9000 }, seen_opts)
+  eq(true, result.submitted)
+  eq(true, result.tracked)
+  eq("timeout", result.tracking_error.code)
+  contains(result.tracking_message, "still running")
+
+  herdr.prompt = function(_, _, _, callback)
+    callback(nil, { code = "agent_prompt_stalled", message = "no transition" })
+  end
+  ok, err, result = stage_and_wait({}, { pane_id = "w1:p2", agent = "codex" }, "review", {
+    submit = true,
+    wait = true,
+  })
+  herdr.prompt = original_prompt
+  truthy(ok, err)
+  eq(true, result.submitted)
+  contains(result.tracking_message, "no agent state transition")
+end)
+
+test("focuses tracked agents that finish blocked", function()
+  local original_prompt = herdr.prompt
+  local original_focus = herdr.focus
+  local focused
+  herdr.prompt = function(_, pane_id, _, callback)
+    callback({ pane_id = pane_id, agent = "codex", agent_status = "blocked" }, nil)
+  end
+  herdr.focus = function(_, pane_id, callback)
+    focused = pane_id
+    callback("", nil)
+  end
+  local ok, err, result = stage_and_wait(
+    { focus_after_send = false },
+    { pane_id = "w1:p2", agent = "codex" },
+    "review",
+    {
+      submit = true,
+      wait = true,
+    }
+  )
+  herdr.prompt = original_prompt
+  herdr.focus = original_focus
+  truthy(ok, err)
+  eq("w1:p2", focused)
+  eq("blocked", result.status)
+  eq(true, result.tracked)
+end)
+
 test("reports invalid Herdr JSON and stopped-server errors", function()
   local log = vim.fn.tempname()
   vim.fn.writefile({}, log)
@@ -1991,6 +2093,9 @@ test("opens the prompt editor with an exact Visual selection attached", function
     bufnr = source,
     winid = vim.api.nvim_get_current_win(),
     selection = { mode = "v", start = { 1, 7 }, finish = { 2, 11 } },
+    wait = true,
+    timeout_ms = 120000,
+    preview_result = true,
   })
   truthy(session)
   truthy(
@@ -2001,6 +2106,9 @@ test("opens the prompt editor with an exact Visual selection attached", function
   )
   eq("alpha = 1\nlocal bravo", session.request.capture.text)
   eq("v", session.request.mode)
+  eq(true, session.track)
+  eq(120000, session.tracking_timeout_ms)
+  eq(true, session.preview_result)
   require("herdr-context.ui.instruction").close(session)
   session:close()
   delete_buffer(source)

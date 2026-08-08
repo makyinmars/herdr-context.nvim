@@ -294,6 +294,21 @@ send and submit it. `<C-s>` keeps the message and returns to the composer so you
 attached context first. In Normal mode, the same action starts from the current line and discovers the
 containing symbol, hunk, and diagnostics.
 
+Tracking is opt-in for Lua callers. It submits through `agent prompt --wait` and observes the agent
+until it reaches `idle`, unseen `done`, or `blocked`:
+
+```lua
+require("herdr-context").prompt({
+  wait = true,
+  timeout_ms = 120000,
+  preview_result = true, -- also open output for idle/done; blocked always opens it
+})
+```
+
+Ordinary `<C-Enter>` remains a short-lived send and does not wait. A tracked `blocked` result focuses
+the agent and opens its output; `idle` and `done` notify completion. A tracking timeout or
+`agent_prompt_stalled` warning does not cancel the remote task, which may continue running.
+
 Normal mode selects the innermost symbol, the hunk under the cursor, and diagnostics scoped to the
 symbol (then the hunk). If neither symbol nor hunk is available, it selects the current line. Visual
 mode selects the exact Visual range and overlapping diagnostics, leaving symbol and hunk unchecked.

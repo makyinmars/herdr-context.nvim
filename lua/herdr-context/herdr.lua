@@ -174,8 +174,50 @@ function M.send(config, pane_id, text, callback)
   return M.run(config, { "pane", "send-text", pane_id, text }, callback)
 end
 
-function M.prompt(config, pane_id, text, callback)
-  return M.run(config, { "agent", "prompt", pane_id, text }, callback)
+function M.prompt(config, pane_id, text, callback, opts)
+  opts = opts or {}
+  local args = { "agent", "prompt", pane_id, text }
+  if opts.wait then
+    vim.list_extend(args, {
+      "--wait",
+      "--until",
+      "idle",
+      "--until",
+      "done",
+      "--until",
+      "blocked",
+    })
+    if opts.timeout_ms then
+      vim.list_extend(args, { "--timeout", tostring(opts.timeout_ms) })
+    end
+  end
+  if not opts.wait then
+    return M.run(config, args, callback)
+  end
+  return M.run(config, args, function(output, err, result)
+    if err then
+      local detail = result and result.stderr or err
+      local ok, decoded = pcall(vim.json.decode, detail or "")
+      local api_err = ok and type(decoded) == "table" and decoded.error or nil
+      if type(api_err) ~= "table" then
+        api_err = { code = "prompt_failed", message = err }
+      end
+      api_err.message = api_err.message or err
+      callback(nil, api_err, result)
+      return
+    end
+    local ok, decoded = pcall(vim.json.decode, output or "")
+    local agent = ok and decoded and decoded.result and decoded.result.agent or nil
+    if type(agent) ~= "table" or not agent.agent_status then
+      callback(
+        nil,
+        { code = "invalid_response", message = "Herdr prompt response did not contain result.agent" },
+        result
+      )
+      return
+    end
+    callback(agent, nil, result)
+  end)
 end
 
 function M.submit(config, pane_id, callback)

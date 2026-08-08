@@ -118,6 +118,19 @@ function M.compose(opts)
 end
 
 function M.prompt(opts)
+  opts = opts or {}
+  vim.validate({
+    opts = { opts, "table" },
+    wait = { opts.wait, "boolean", true },
+    timeout_ms = { opts.timeout_ms, "number", true },
+    preview_result = { opts.preview_result, "boolean", true },
+  })
+  if opts.timeout_ms and (opts.timeout_ms <= 0 or opts.timeout_ms % 1 ~= 0) then
+    error("herdr-context: prompt timeout_ms must be a positive integer")
+  end
+  if opts.timeout_ms and not opts.wait then
+    error("herdr-context: prompt timeout_ms requires wait = true")
+  end
   opts = vim.tbl_extend("force", opts or {}, { edit_instruction = true })
   return require("herdr-context.composer").open(opts)
 end

@@ -4,6 +4,7 @@ All notable changes to `herdr-context.nvim` are documented here.
 
 ## Unreleased
 
+- Add opt-in `prompt({ wait = true })` lifecycle tracking with completion/blocked handling, optional result previews, and non-cancelling timeout/stall reporting.
 - Apply Herdr socket resource events directly to the presence cache, including `workspace.reordered`, and reserve snapshots for bootstrap, reconnect, explicit refresh, and inconsistency recovery.
 - Add normal and deep socket-backed agent output previews with busy-agent viewport fallback and truncation indicators.
 - Treat Herdr's unseen `done` lifecycle as a first-class state in target ranking, notifications, the picker, drawer, and statusline, and render custom display names and state labels when available.
