@@ -146,6 +146,10 @@ function M.send(config, pane_id, text, callback)
   return M.run(config, { "pane", "send-text", pane_id, text }, callback)
 end
 
+function M.prompt(config, pane_id, text, callback)
+  return M.run(config, { "agent", "prompt", pane_id, text }, callback)
+end
+
 function M.submit(config, pane_id, callback)
   return M.run(config, { "pane", "send-keys", pane_id, "enter" }, callback)
 end

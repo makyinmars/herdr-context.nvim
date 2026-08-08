@@ -6,6 +6,7 @@ All notable changes to `herdr-context.nvim` are documented here.
 
 - Add `:HerdrContextPrompt` and `prompt()` for a Visual-selection-to-message workflow entirely inside Neovim.
 - Add an explicit `S`/`<C-Enter>` send-now action without changing the safe non-submitting default.
+- Route explicit sends through agent-aware `herdr agent prompt` while retaining raw, non-submitting staging.
 - Refresh the composer and message editor with clearer context attachments, source details, payload sizing, and key hints.
 - Reopen target selection before each send when multiple agents are live instead of silently reusing a session target.
 

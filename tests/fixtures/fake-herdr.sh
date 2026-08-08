@@ -19,6 +19,11 @@ if [ "${1:-}" = 'pane' ] && [ "${2:-}" = 'send-text' ]; then
   printf 'target=%s\ntext=%s\n' "${3:-}" "$hex" >> "$log"
 fi
 
+if [ "${1:-}" = 'agent' ] && [ "${2:-}" = 'prompt' ]; then
+  hex=$(printf '%s' "${4:-}" | od -An -v -tx1 | tr -d ' \n')
+  printf 'target=%s\nprompt=%s\n' "${3:-}" "$hex" >> "$log"
+fi
+
 if [ "${1:-}" = 'api' ] && [ "${2:-}" = 'snapshot' ]; then
   if [ "${FAKE_HERDR_MODE:-}" = 'invalid-json' ]; then
     printf '%s\n' 'not json'

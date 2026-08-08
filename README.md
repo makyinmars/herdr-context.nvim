@@ -272,9 +272,11 @@ In `auto` mode, multiline payloads for Codex and Claude use terminal bracketed-p
 Unknown agents receive a single-line reference to a temporary Markdown context file. This avoids
 injecting literal newline bytes into an agent that may interpret them as Enter.
 
-The transport uses Herdr 0.7.5's `pane send-text` API so staging remains non-submitting. In `auto` mode,
+Stage-only transport uses Herdr's `pane send-text` API so staging remains non-submitting. In `auto` mode,
 the bracketed-paste contract keeps both lines in the input editor while the agent remains `idle`. Unknown
 or newly introduced agent families remain on the conservative context-file path until configured.
+Explicit submission (`S`, `<C-Enter>`, or `submit = true`) sends the original payload through
+`herdr agent prompt`, which validates the live agent and handles its input mode and Enter atomically.
 
 ## Context composer
 
@@ -490,7 +492,7 @@ Default sends never submit:
 - context is passed to `herdr pane send-text` as one argv element;
 - no shell-concatenated command is used;
 - multiline input is bracketed-pasted only for configured agents, otherwise staged through a context file;
-- Enter is sent only by the separate `herdr pane send-keys <pane> enter` command when `submit = true`;
+- explicit submission passes the original payload to agent-aware `herdr agent prompt` as one argv element;
 - payload size is checked before target resolution or transport.
 
 Keep `submit = false` unless automatic submission is explicitly desired.
