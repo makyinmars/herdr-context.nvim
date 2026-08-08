@@ -12,7 +12,8 @@ submitting it.
 
 - Neovim 0.10 or newer
 - Herdr 0.7.5 or newer
-- `jq` for the optional Herdr popup target picker
+- `jq` for the optional Herdr popup target picker on Linux and macOS
+- Windows PowerShell 5.1 or newer for the optional picker on Windows
 
 Neovim should normally be running in a Herdr pane so `HERDR_PANE_ID`, `HERDR_TAB_ID`, and
 `HERDR_WORKSPACE_ID` are available.
@@ -403,10 +404,11 @@ throwing; `:checkhealth herdr-context` summarizes the currently usable backends.
 ## Live presence
 
 One shared state store serves the statusline, agent drawer, and target UI. Setup fetches an initial
-snapshot, then subscribes to Herdr events over `HERDR_SOCKET_PATH`. Events are invalidation signals:
-bursts are debounced and produce one fresh snapshot. If the socket disconnects, cached data is marked
-stale, polling starts, and socket reconnects use exponential backoff. Polling stops after reconnect.
-Every pipe and timer closes on `VimLeavePre`.
+snapshot, then subscribes to Herdr events over `HERDR_SOCKET_PATH`. Unix socket paths are used directly;
+on Windows, bare pipe names are mapped to `\\.\pipe\<name>` and health checks test the named pipe by
+connecting instead of treating it as a filesystem entry. If the connection drops, cached data is marked
+stale, polling starts, and reconnects use exponential backoff. Polling stops after reconnect. Every pipe
+and timer closes on `VimLeavePre`.
 
 The statusline reads only cached Lua state; it never starts a process or performs socket I/O during a
 redraw:
@@ -507,12 +509,13 @@ The selected pane is still checked against a fresh snapshot before every send. W
 reusing the previous destination. A sole remaining candidate is selected when `auto_select = true`.
 `vim.ui.select` drives the picker, so existing Snacks integrations are honored.
 
-The Herdr companion action `herdr-context.pin-target` opens an 80%-wide, 20-row popup picker. The popup
-is transient: it does not join the tiled layout, appear in agent snapshots, or emit pane lifecycle
-events, and it closes when the picker exits. It stores one pane ID per
-workspace in the plugin config directory. Neovim reads the same file. Set `remember_target = "workspace"`
-to make Neovim selections update it too and keep that explicit pin across sends, or set
-`HERDR_CONTEXT_CONFIG` to override the shared file path.
+The Herdr companion action `herdr-context.pin-target` on Linux/macOS, or
+`herdr-context.pin-target-windows` on Windows, opens an 80%-wide, 20-row popup picker. The popup is
+transient: it does not join the tiled layout, appear in agent snapshots, or emit pane lifecycle events,
+and it closes when the picker exits. The Bash picker uses `jq`; the Windows picker uses only the bundled
+Windows PowerShell runtime. It stores one pane ID per workspace in the plugin config directory. Neovim
+reads the same file. Set `remember_target = "workspace"` to make Neovim selections update it too and
+keep that explicit pin across sends, or set `HERDR_CONTEXT_CONFIG` to override the shared file path.
 
 ## Payloads
 
@@ -539,7 +542,9 @@ zen = {
 Paths are relative to the Git root, falling back to Neovim's working directory. Modified buffers are
 marked `(unsaved changes)`. Content from unnamed buffers is allowed, but reference-only mode rejects it
 because it has no stable path. Markdown fences expand past the longest backtick run in the selection.
-Payloads over `max_payload_bytes` are rejected rather than truncated.
+Drive-letter and UNC paths are normalized and compared case-insensitively on Windows; context-file
+references use forward slashes so they remain unambiguous in agent prompts. Payloads over
+`max_payload_bytes` are rejected rather than truncated.
 
 Diagnostics include severity, source, code, message, and source line:
 
@@ -588,3 +593,5 @@ fixtures, MiniDiff add/change/delete hunks, Git diff parsing, quickfix normaliza
 buffers, exact preview rendering, and combined byte budgets. Transport tests use a fake Herdr
 executable; presence tests use sanitized socket fixtures and fake clients. Shell smoke tests exercise
 the companion popup launcher and manifest sizing, target ranking, and workspace target persistence.
+Windows CI separately covers drive and UNC paths, named-pipe endpoints and presence probes, exact
+multiline/modified-key transport, and the PowerShell companion picker.

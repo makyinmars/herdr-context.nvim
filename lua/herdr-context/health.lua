@@ -2,10 +2,16 @@ local M = {}
 
 local config = require("herdr-context.config")
 local herdr = require("herdr-context.herdr")
+local socket = require("herdr-context.socket")
 local state = require("herdr-context.state")
 local targets = require("herdr-context.targets")
 
 local health = vim.health or require("health")
+local uv = vim.uv or vim.loop
+
+local function is_windows()
+  return package.config:sub(1, 1) == "\\"
+end
 
 local function has_version(major, minor)
   local version = vim.version()
@@ -36,7 +42,11 @@ local function check_companion(cfg)
   end
   if output:find('"herdr%-context"') or output:find('"id"%s*:%s*"herdr%-context"') then
     health.ok("Herdr companion plugin is installed")
-    if vim.fn.executable("jq") == 1 then
+    if is_windows() and vim.fn.executable("powershell.exe") == 1 then
+      health.ok("Windows PowerShell is available for the companion target picker")
+    elseif is_windows() then
+      health.warn("powershell.exe is missing; install PowerShell to use the companion target picker")
+    elseif vim.fn.executable("jq") == 1 then
       health.ok("jq is available for the companion target picker")
     else
       health.warn("jq is missing; install it to use the companion target picker")
@@ -104,8 +114,16 @@ function M.check()
     local current = state.get()
     local socket_path = vim.env.HERDR_SOCKET_PATH
     if socket_path and socket_path ~= "" then
-      if (vim.uv or vim.loop).fs_stat(socket_path) then
+      local available, socket_err
+      if is_windows() then
+        available, socket_err = socket.probe(socket_path)
+      else
+        available = uv.fs_stat(socket_path) ~= nil
+      end
+      if available then
         health.ok("Herdr socket: " .. socket_path)
+      elseif is_windows() then
+        health.warn("Could not connect to the Herdr named pipe: " .. tostring(socket_err))
       else
         health.warn("HERDR_SOCKET_PATH does not exist: " .. socket_path)
       end

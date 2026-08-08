@@ -24,3 +24,25 @@ jobs:
           version: latest
           args: --check lua plugin tests
       - run: make test
+
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        neovim: [v0.10.4, stable]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          version: ${{ matrix.neovim }}
+          neovim: true
+      - name: Test Windows Lua paths, named pipes, and transport
+        shell: powershell
+        run: |
+          $env:XDG_STATE_HOME = Join-Path $env:RUNNER_TEMP "herdr-context-nvim-state"
+          nvim --headless -u tests/minimal_init.lua -l tests/windows.lua
+      - name: Test Windows companion picker
+        if: matrix.neovim == 'stable'
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/scripts.ps1

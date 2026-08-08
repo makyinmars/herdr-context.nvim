@@ -3,18 +3,36 @@ name = "Herdr Context"
 version = "0.4.1"
 min_herdr_version = "0.7.5"
 description = "See live Herdr agents and stage structured Neovim context without submitting it"
-platforms = ["linux", "macos"]
+platforms = ["linux", "macos", "windows"]
 
 [[actions]]
 id = "pin-target"
 title = "Pin context target"
 contexts = ["global"]
+platforms = ["linux", "macos"]
 command = ["bash", "scripts/open-target-picker.sh"]
+
+[[actions]]
+id = "pin-target-windows"
+title = "Pin context target"
+contexts = ["global"]
+platforms = ["windows"]
+command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/open-target-picker.ps1"]
 
 [[panes]]
 id = "target-picker"
 title = "Pin context target"
+platforms = ["linux", "macos"]
 placement = "popup"
 width = "80%"
 height = 20
 command = ["bash", "scripts/target-picker.sh"]
+
+[[panes]]
+id = "target-picker-windows"
+title = "Pin context target"
+platforms = ["windows"]
+placement = "popup"
+width = "80%"
+height = 20
+command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/target-picker.ps1"]

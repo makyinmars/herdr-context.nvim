@@ -4,6 +4,7 @@ All notable changes to `herdr-context.nvim` are documented here.
 
 ## Unreleased
 
+- Add Windows support with a PowerShell companion picker, named-pipe presence checks, drive/UNC-aware path matching and references, exact transport coverage, and Windows CI.
 - Open the companion target picker as a true 80%-wide, 20-row Herdr popup that stays out of layouts, snapshots, and pane lifecycle events.
 - Add `:HerdrContextDelegate <kind> [preset]` to review a composer bundle, create a split/tab/workspace agent, start and prompt it, and optionally wait for and preview its result.
 - Add `:HerdrContextExplainAgent` and drawer `e` to inspect Herdr's authoritative detection rules, evidence, lifecycle authority, fallback reasons, and manifest versions.

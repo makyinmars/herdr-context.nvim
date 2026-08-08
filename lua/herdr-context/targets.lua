@@ -6,11 +6,24 @@ local state = require("herdr-context.state")
 
 local selected
 
+local function windows_platform()
+  return package.config:sub(1, 1) == "\\"
+end
+
 local function normalize(path)
   if not path or path == "" then
     return nil
   end
-  return vim.fs.normalize(vim.fn.fnamemodify(path, ":p")):gsub("/+$", "")
+  local windows = windows_platform() and (path:match("^%a:[/\\]") or path:match("^[/\\][/\\]"))
+  local normalized = windows and vim.fs.normalize((path:gsub("\\", "/")))
+    or vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+  if windows then
+    normalized = normalized:gsub("\\", "/")
+  end
+  if normalized ~= "/" and not normalized:match("^%a:/$") then
+    normalized = normalized:gsub("/+$", "")
+  end
+  return windows and normalized:lower() or normalized
 end
 
 local function same_git_root(agent_cwd, current_root)

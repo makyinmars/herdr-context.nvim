@@ -2,9 +2,22 @@ local M = {}
 
 local uv = vim.uv or vim.loop
 
+local function windows_platform()
+  return package.config:sub(1, 1) == "\\"
+end
+
+local function is_windows_path(path)
+  return windows_platform()
+    and type(path) == "string"
+    and (path:match("^%a:[/\\]") ~= nil or path:match("^[/\\][/\\]") ~= nil)
+end
+
 local function normalize_path(path)
   if path == "" then
     return path
+  end
+  if is_windows_path(path) then
+    return vim.fs.normalize((path:gsub("\\", "/")))
   end
   return vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
 end
@@ -14,21 +27,48 @@ local function is_directory(path)
   return stat and stat.type == "directory"
 end
 
+local function path_volume(path)
+  return path:match("^(//%?/[Uu][Nn][Cc]/[^/]+/[^/]+)")
+    or path:match("^(//%?/%a:)/")
+    or path:match("^(//[^/]+/[^/]+)")
+    or path:match("^(%a:)/")
+end
+
+local function path_boundary(path)
+  local volume = path_volume(path)
+  if volume and volume:match("%a:$") then
+    return volume .. "/"
+  end
+  return volume
+end
+
+local function parent_path(path)
+  local parent = vim.fs.dirname(path)
+  if parent and parent:match("^%a:$") then
+    return parent .. "/"
+  end
+  return parent
+end
+
 function M.find_git_root(path)
   if not path or path == "" then
     return nil
   end
 
   local current = normalize_path(path)
+  local boundary = is_windows_path(current) and path_boundary(current) or nil
   if not is_directory(current) then
-    current = vim.fs.dirname(current)
+    current = parent_path(current)
   end
 
   while current and current ~= "" do
     if uv.fs_stat(current .. "/.git") then
       return current
     end
-    local parent = vim.fs.dirname(current)
+    if boundary and current:lower() == boundary:lower() then
+      break
+    end
+    local parent = parent_path(current)
     if not parent or parent == current then
       break
     end
@@ -37,19 +77,37 @@ function M.find_git_root(path)
 end
 
 local function relative_path(root, path)
-  root = normalize_path(root):gsub("/+$", "")
+  root = normalize_path(root)
   path = normalize_path(path)
-  if path == root then
+  if root ~= "/" and not root:match("^%a:/$") then
+    root = root:gsub("/+$", "")
+  end
+  local windows = is_windows_path(root) or is_windows_path(path)
+  local root_key = windows and root:lower() or root
+  local path_key = windows and path:lower() or path
+  if path_key == root_key then
     return vim.fs.basename(path)
   end
-  if path:sub(1, #root + 1) == root .. "/" then
+  if path_key:sub(1, #root_key + 1) == root_key .. "/" then
     return path:sub(#root + 2)
+  end
+
+  if windows then
+    local root_volume = path_volume(root_key)
+    local target_volume = path_volume(path_key)
+    if root_volume ~= target_volume and (root_volume or target_volume) then
+      return path
+    end
   end
 
   local root_parts = vim.split(root, "/", { plain = true, trimempty = true })
   local path_parts = vim.split(path, "/", { plain = true, trimempty = true })
   local common = 0
-  while root_parts[common + 1] and root_parts[common + 1] == path_parts[common + 1] do
+  while
+    root_parts[common + 1]
+    and (windows and root_parts[common + 1]:lower() or root_parts[common + 1])
+      == (windows and path_parts[common + 1]:lower() or path_parts[common + 1])
+  do
     common = common + 1
   end
   if common == 0 then
@@ -213,5 +271,7 @@ function M.diagnostics(context)
 
   return items
 end
+
+M._relative_path = relative_path
 
 return M

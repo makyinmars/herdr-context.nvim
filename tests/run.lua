@@ -189,6 +189,13 @@ test("collects and formats diagnostics in the selected range", function()
   delete_buffer(bufnr)
 end)
 
+test("preserves Unix paths that contain Windows-like characters", function()
+  local root = vim.fn.getcwd()
+  eq("C:/module.lua", context._relative_path(root, "C:/module.lua"))
+  eq("../PROJECT/module.lua", context._relative_path("//tmp/project", "//tmp/PROJECT/module.lua"))
+  eq([[/tmp/context\name.md]], transport.reference_path([[/tmp/context\name.md]]))
+end)
+
 test("ranks targets by tab, workspace, project, then session", function()
   local root = vim.fn.getcwd()
   local snapshot = {
@@ -548,6 +555,28 @@ test("supports an explicit one-shot submission without changing the safe default
   contains(output, "agent prompt")
   truthy(not output:find("pane send%-text"), "one-shot submission must not stage separately")
   truthy(not output:find("pane send%-keys"), "one-shot submission must not press Enter separately")
+  vim.fn.delete(log)
+end)
+
+test("preserves Windows multiline and modified-key literals through agent prompt", function()
+  local log = vim.fn.tempname()
+  vim.fn.writefile({}, log)
+  vim.env.FAKE_HERDR_LOG = log
+  local payload = "Keep <C-Space> and <M-Enter> literal\r\nsecond line"
+  local cfg = config.setup({
+    herdr_bin = vim.fn.getcwd() .. "/tests/fixtures/fake-herdr.sh",
+    submit = true,
+    focus_after_send = false,
+  })
+  local ok, err = stage_and_wait(cfg, { pane_id = "w1:p2", agent = "codex" }, payload)
+  truthy(ok, err)
+  local expected_hex = table.concat(
+    vim.tbl_map(function(byte)
+      return ("%02x"):format(byte)
+    end, vim.fn.str2list(payload)),
+    ""
+  )
+  contains(read_log(log), "prompt=" .. expected_hex)
   vim.fn.delete(log)
 end)
 
@@ -1458,6 +1487,48 @@ test("decodes fragmented and batched socket messages", function()
   eq(2, #errors)
   contains(errors[1].err, "invalid JSON")
   contains(errors[2].err, "closed during")
+end)
+
+test("maps and probes Windows named-pipe endpoints", function()
+  eq([[\\.\pipe\herdr-session]], socket.endpoint("herdr-session", true))
+  eq([[\\.\pipe\ready]], socket.endpoint([[\\.\pipe\ready]], true))
+  eq("/tmp/herdr.sock", socket.endpoint("/tmp/herdr.sock", false))
+
+  local endpoint
+  local closed = false
+  local fake_pipe = {
+    connect = function(_, path, callback)
+      endpoint = path
+      callback(nil)
+    end,
+    is_closing = function()
+      return false
+    end,
+    close = function()
+      closed = true
+    end,
+  }
+  local available, err = socket.probe("herdr-session", {
+    windows = true,
+    new_pipe = function()
+      return fake_pipe
+    end,
+  })
+  truthy(available, err)
+  eq([[\\.\pipe\herdr-session]], endpoint)
+  eq(true, closed)
+
+  fake_pipe.connect = function(_, _, callback)
+    callback("ECONNREFUSED")
+  end
+  available, err = socket.probe("missing", {
+    windows = true,
+    new_pipe = function()
+      return fake_pipe
+    end,
+  })
+  eq(false, available)
+  contains(err, "ECONNREFUSED")
 end)
 
 test("socket client reads NDJSON and suppresses callbacks after shutdown", function()

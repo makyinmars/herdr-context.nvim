@@ -2,6 +2,47 @@ local M = {}
 
 local uv = vim.uv or vim.loop
 
+local function windows_platform()
+  return package.config:sub(1, 1) == "\\"
+end
+
+function M.endpoint(path, windows)
+  windows = windows == nil and windows_platform() or windows
+  if not windows or path:sub(1, 9):lower() == [[\\.\pipe\]] or path:sub(1, 9):lower() == [[\\?\pipe\]] then
+    return path
+  end
+  return [[\\.\pipe\]] .. path
+end
+
+function M.probe(path, opts)
+  opts = opts or {}
+  local factory = opts.new_pipe or uv.new_pipe
+  local ok, pipe = pcall(factory, false)
+  if not ok or not pipe then
+    return false, "Could not create a pipe client: " .. tostring(pipe)
+  end
+  local finished = false
+  local connect_err
+  local connected, start_err = pcall(pipe.connect, pipe, M.endpoint(path, opts.windows), function(err)
+    connect_err = err
+    finished = true
+  end)
+  if not connected then
+    connect_err = start_err
+    finished = true
+  end
+  vim.wait(opts.timeout_ms or 250, function()
+    return finished
+  end, 10)
+  if not pipe:is_closing() then
+    pipe:close()
+  end
+  if not finished then
+    return false, "connection timed out"
+  end
+  return connect_err == nil, connect_err and tostring(connect_err) or nil
+end
+
 function M.decoder(on_message, on_error)
   on_message = on_message or function() end
   on_error = on_error or function() end
@@ -164,7 +205,7 @@ function M.new(opts)
     on_close = { opts.on_close, "function", true },
   })
   return setmetatable({
-    path = opts.path,
+    path = M.endpoint(opts.path),
     on_connect = opts.on_connect,
     on_message = opts.on_message,
     on_error = opts.on_error,

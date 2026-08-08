@@ -30,6 +30,14 @@ local function write_context_file(config, payload)
   return path
 end
 
+local function reference_path(path)
+  path = tostring(path)
+  if package.config:sub(1, 1) == "\\" then
+    return (path:gsub("\\", "/"))
+  end
+  return path
+end
+
 function M.prepare(config, target, payload)
   if not has_newline(payload) then
     return payload, "literal"
@@ -46,7 +54,7 @@ function M.prepare(config, target, payload)
   if not path then
     return nil, nil, err
   end
-  return "Context staged in @" .. path, "context_file", nil, path
+  return "Context staged in @" .. reference_path(path), "context_file", nil, path
 end
 
 local function focus_if_needed(config, target, callback)
@@ -136,5 +144,6 @@ end
 
 M.bracketed_paste_start = bracketed_paste_start
 M.bracketed_paste_end = bracketed_paste_end
+M.reference_path = reference_path
 
 return M
