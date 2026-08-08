@@ -85,6 +85,7 @@ local defaults = {
     position = "right",
     width = 44,
     preview_lines = 80,
+    deep_preview_lines = 300,
     group_by = "workspace",
     side_preview = true,
     preview_width = 64,
@@ -148,6 +149,7 @@ local function validate(opts)
     ["agents_view.position"] = { opts.agents_view.position, "string" },
     ["agents_view.width"] = { opts.agents_view.width, "number" },
     ["agents_view.preview_lines"] = { opts.agents_view.preview_lines, "number" },
+    ["agents_view.deep_preview_lines"] = { opts.agents_view.deep_preview_lines, "number" },
     ["agents_view.group_by"] = { opts.agents_view.group_by, "string" },
     ["agents_view.side_preview"] = { opts.agents_view.side_preview, "boolean" },
     ["agents_view.preview_width"] = { opts.agents_view.preview_width, "number" },
@@ -257,6 +259,9 @@ local function validate(opts)
   end
   if opts.agents_view.preview_lines <= 0 or opts.agents_view.preview_lines % 1 ~= 0 then
     error("herdr-context: agents_view.preview_lines must be a positive integer")
+  end
+  if opts.agents_view.deep_preview_lines <= 0 or opts.agents_view.deep_preview_lines % 1 ~= 0 then
+    error("herdr-context: agents_view.deep_preview_lines must be a positive integer")
   end
   if opts.agents_view.preview_width < 20 or opts.agents_view.preview_width % 1 ~= 0 then
     error("herdr-context: agents_view.preview_width must be an integer of at least 20")

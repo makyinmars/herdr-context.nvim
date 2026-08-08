@@ -246,7 +246,7 @@ function M.render()
   end
 
   lines[#lines + 1] = ""
-  lines[#lines + 1] = " <CR>/t target   f focus   p output"
+  lines[#lines + 1] = " <CR>/t target   f focus   p/P output/deep"
   lines[#lines + 1] = " / filter   Space fold   r refresh   q close"
 
   vim.bo[bufnr].modifiable = true
@@ -304,7 +304,7 @@ function M.focus()
   end)
 end
 
-function M.preview()
+function M.preview(opts)
   local agent = selected_agent()
   if not agent then
     return
@@ -314,7 +314,12 @@ function M.preview()
     side = cfg.agents_view.side_preview,
     source_winid = winid,
     position = cfg.agents_view.position,
+    deep = opts and opts.deep,
   })
+end
+
+function M.deep_preview()
+  M.preview({ deep = true })
 end
 
 function M.filter()
@@ -401,6 +406,7 @@ function M.open()
   map("t", M.select_target, "Select Herdr target")
   map("f", M.focus, "Focus Herdr pane")
   map("p", M.preview, "Preview Herdr output")
+  map("P", M.deep_preview, "Preview deep Herdr output")
   map("/", M.filter, "Filter Herdr agents")
   map(" ", M.toggle_group, "Toggle Herdr agent group")
   map("c", function()

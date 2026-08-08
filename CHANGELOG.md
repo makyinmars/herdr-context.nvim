@@ -4,6 +4,7 @@ All notable changes to `herdr-context.nvim` are documented here.
 
 ## Unreleased
 
+- Add normal and deep socket-backed agent output previews with busy-agent viewport fallback and truncation indicators.
 - Treat Herdr's unseen `done` lifecycle as a first-class state in target ranking, notifications, the picker, drawer, and statusline, and render custom display names and state labels when available.
 - Add `:HerdrContextPrompt` and `prompt()` for a Visual-selection-to-message workflow entirely inside Neovim.
 - Add an explicit `S`/`<C-Enter>` send-now action without changing the safe non-submitting default.

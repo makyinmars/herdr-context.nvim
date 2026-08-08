@@ -505,6 +505,45 @@ test("reads recent agent output with bounded text arguments", function()
   }, seen)
 end)
 
+test("reads agent output metadata through the socket API", function()
+  local request
+  local read
+  herdr.read_agent({}, "w0:p9", {
+    source = "recent-unwrapped",
+    lines = 125,
+    metadata = true,
+    socket_path = "/tmp/herdr.sock",
+    socket_request = function(opts, callback)
+      request = opts
+      callback({
+        type = "pane_read",
+        read = {
+          pane_id = "w0:p9",
+          source = "recent_unwrapped",
+          text = "older\nnewer",
+          revision = 42,
+          truncated = true,
+        },
+      }, nil)
+      return { kill = function() end }
+    end,
+  }, function(value, err)
+    truthy(value, err)
+    read = value
+  end)
+  eq("agent.read", request.method)
+  eq({
+    target = "w0:p9",
+    source = "recent_unwrapped",
+    lines = 125,
+    format = "text",
+    strip_ansi = true,
+  }, request.params)
+  eq("older\nnewer", read.text)
+  eq(42, read.revision)
+  eq(true, read.truncated)
+end)
+
 test("normalizes state and returns immutable public snapshots", function()
   state._reset()
   state._replace({
@@ -786,6 +825,66 @@ test("socket client reads NDJSON and suppresses callbacks after shutdown", funct
   vim.fn.delete(path)
 end)
 
+test("socket request sends an envelope and returns its matching result", function()
+  local uv = vim.uv or vim.loop
+  local path = "/tmp/herdr-context-request-" .. tostring(uv.os_getpid()) .. ".sock"
+  vim.fn.delete(path)
+  local server = uv.new_pipe(false)
+  local bound, bind_err = server:bind(path)
+  if not bound then
+    server:close()
+    vim.fn.delete(path)
+    if tostring(bind_err):find("EPERM", 1, true) then
+      return
+    end
+    fail(tostring(bind_err))
+  end
+
+  local peer
+  local envelope
+  server:listen(1, function(err)
+    if err then
+      return
+    end
+    peer = uv.new_pipe(false)
+    server:accept(peer)
+    local decoder = socket.decoder(function(message)
+      envelope = message
+      peer:write(vim.json.encode({ id = message.id, result = { type = "ok", value = 7 } }) .. "\n")
+    end)
+    peer:read_start(function(_, chunk)
+      decoder.feed(chunk)
+    end)
+  end)
+
+  local result
+  local request = socket.request({
+    path = path,
+    method = "test.echo",
+    params = { value = 7 },
+    timeout_ms = 500,
+  }, function(value, err)
+    truthy(value, err and err.message)
+    result = value
+  end)
+  truthy(
+    vim.wait(500, function()
+      return result ~= nil
+    end),
+    "socket request did not complete"
+  )
+  eq("test.echo", envelope.method)
+  eq({ value = 7 }, envelope.params)
+  eq({ type = "ok", value = 7 }, result)
+  request:close()
+  if peer and not peer:is_closing() then
+    peer:read_stop()
+    peer:close()
+  end
+  server:close()
+  vim.fn.delete(path)
+end)
+
 test("watcher debounces events and falls back to polling", function()
   state._reset()
   watch.stop({ silent = true })
@@ -1048,15 +1147,23 @@ test("renders the drawer with stable pane mappings and actions", function()
     return { kill = function() end }
   end
   drawer.preview()
-  herdr.read_agent = original_read_agent
   local preview = require("herdr-context.ui.preview")
   local active_preview = preview._active()
   truthy(active_preview)
   eq("w0:p2", read_request.pane_id)
   eq("recent-unwrapped", read_request.opts.source)
   eq(80, read_request.opts.lines)
+  eq(true, read_request.opts.metadata)
   eq({ "build passed", "ready" }, vim.api.nvim_buf_get_lines(active_preview.bufnr, 0, -1, false))
   preview.close()
+
+  drawer.deep_preview()
+  active_preview = preview._active()
+  truthy(active_preview)
+  eq(300, read_request.opts.lines)
+  eq({ "build passed", "ready" }, vim.api.nvim_buf_get_lines(active_preview.bufnr, 0, -1, false))
+  preview.close()
+  herdr.read_agent = original_read_agent
 
   local original_input = vim.ui.input
   vim.ui.input = function(_, callback)
@@ -1125,6 +1232,39 @@ test("cancels superseded output previews and ignores stale callbacks", function(
   callbacks["w0:p2"]("fresh output", nil)
   local active_preview = preview._active()
   eq({ "fresh output" }, vim.api.nvim_buf_get_lines(active_preview.bufnr, 0, -1, false))
+  preview.close()
+  herdr.read_agent = original_read_agent
+end)
+
+test("falls back to live output for busy agents and marks truncation", function()
+  config.setup({ agents_view = { preview_lines = 80, deep_preview_lines = 240 } })
+  local preview = require("herdr-context.ui.preview")
+  local sources = {}
+  local original_read_agent = herdr.read_agent
+  herdr.read_agent = function(_, _, opts, callback)
+    sources[#sources + 1] = { source = opts.source, lines = opts.lines }
+    if opts.source == "recent-unwrapped" then
+      callback(nil, { code = "agent_not_idle", message = "agent is busy" })
+    else
+      callback({ text = "live one\nlive two", truncated = true }, nil)
+    end
+    return { kill = function() end }
+  end
+
+  preview.open({ pane_id = "w0:p1", agent = "codex" }, { deep = true })
+  local active_preview = preview._active()
+  eq({
+    { source = "recent-unwrapped", lines = 240 },
+    { source = "visible", lines = 240 },
+  }, sources)
+  eq({
+    "── older output omitted ──",
+    "",
+    "live viewport; full history available when idle",
+    "",
+    "live one",
+    "live two",
+  }, vim.api.nvim_buf_get_lines(active_preview.bufnr, 0, -1, false))
   preview.close()
   herdr.read_agent = original_read_agent
 end)

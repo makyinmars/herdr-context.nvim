@@ -1,5 +1,7 @@
 local M = {}
 
+local socket = require("herdr-context.socket")
+
 local function binary(config)
   return config.herdr_bin or vim.env.HERDR_BIN_PATH or "herdr"
 end
@@ -129,6 +131,32 @@ function M.read_agent(config, pane_id, opts, callback)
   opts = opts or {}
   local source = opts.source or "recent-unwrapped"
   local lines = opts.lines or 80
+  local socket_path = opts.socket_path or vim.env.HERDR_SOCKET_PATH
+  if opts.metadata and callback and socket_path and socket_path ~= "" then
+    local request = opts.socket_request or socket.request
+    return request({
+      path = socket_path,
+      method = "agent.read",
+      params = {
+        target = pane_id,
+        source = source:gsub("-", "_"),
+        lines = lines,
+        format = "text",
+        strip_ansi = true,
+      },
+    }, function(result, err)
+      if err then
+        callback(nil, err)
+        return
+      end
+      local read = result and result.read
+      if type(read) ~= "table" or type(read.text) ~= "string" then
+        callback(nil, { code = "invalid_response", message = "Herdr agent.read response did not contain result.read" })
+        return
+      end
+      callback(read, nil)
+    end)
+  end
   return M.run(config, {
     "agent",
     "read",

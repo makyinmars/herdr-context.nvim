@@ -19,6 +19,33 @@ local function render(preview, lines)
   vim.bo[preview.bufnr].modifiable = false
 end
 
+local function error_message(err)
+  if type(err) == "table" then
+    return err.message or err.code or vim.inspect(err)
+  end
+  return tostring(err)
+end
+
+local function read_lines(value, fallback)
+  local read = type(value) == "table" and value or { text = value or "", truncated = false }
+  local output = read.text:gsub("\r\n", "\n"):gsub("\n$", "")
+  local lines = {}
+  if read.truncated then
+    lines[#lines + 1] = "── older output omitted ──"
+    lines[#lines + 1] = ""
+  end
+  if fallback then
+    lines[#lines + 1] = "live viewport; full history available when idle"
+    lines[#lines + 1] = ""
+  end
+  if output == "" then
+    lines[#lines + 1] = "No recent agent output."
+  else
+    vim.list_extend(lines, vim.split(output, "\n", { plain = true }))
+  end
+  return lines
+end
+
 local function cleanup(preview)
   if active ~= preview then
     return
@@ -112,24 +139,34 @@ function M.open(agent, opts)
   })
 
   render(preview, { "Loading recent agent output…" })
-  preview.process = herdr.read_agent(config.get(), agent.pane_id, {
-    source = "recent-unwrapped",
-    lines = config.get().agents_view.preview_lines,
-  }, function(output, err)
-    if active ~= preview or generation ~= request_generation then
-      return
+  local cfg = config.get()
+  local line_count = opts.deep and cfg.agents_view.deep_preview_lines or cfg.agents_view.preview_lines
+  local function read(source, fallback)
+    local callback_called = false
+    local process = herdr.read_agent(cfg, agent.pane_id, {
+      source = source,
+      lines = line_count,
+      metadata = true,
+    }, function(output, err)
+      callback_called = true
+      if active ~= preview or generation ~= request_generation then
+        return
+      end
+      if type(err) == "table" and err.code == "agent_not_idle" and source ~= "visible" then
+        read("visible", true)
+        return
+      end
+      if err then
+        render(preview, { "Could not read agent output:", "", error_message(err) })
+        return
+      end
+      render(preview, read_lines(output, fallback))
+    end)
+    if not callback_called then
+      preview.process = process
     end
-    if err then
-      render(preview, { "Could not read agent output:", "", err })
-      return
-    end
-    output = (output or ""):gsub("\r\n", "\n"):gsub("\n$", "")
-    if output == "" then
-      render(preview, { "No recent agent output." })
-      return
-    end
-    render(preview, vim.split(output, "\n", { plain = true }))
-  end)
+  end
+  read("recent-unwrapped", false)
   return bufnr
 end
 

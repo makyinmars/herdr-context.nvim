@@ -174,4 +174,101 @@ function M.new(opts)
   }, Client)
 end
 
+local request_number = 0
+
+function M.request(opts, callback)
+  opts = opts or {}
+  vim.validate({
+    path = { opts.path, "string" },
+    method = { opts.method, "string" },
+    params = { opts.params, "table", true },
+    timeout_ms = { opts.timeout_ms, "number", true },
+    callback = { callback, "function" },
+  })
+
+  request_number = request_number + 1
+  local request_id = opts.id or "herdr-context:request:" .. tostring(request_number)
+  local finished = false
+  local timer
+  local client
+  local request = {}
+
+  local function close_timer()
+    if timer then
+      timer:stop()
+      if not timer:is_closing() then
+        timer:close()
+      end
+      timer = nil
+    end
+  end
+
+  local function finish(result, err, response)
+    if finished then
+      return
+    end
+    finished = true
+    close_timer()
+    if client then
+      client:close({ silent = true, reason = "request_complete" })
+    end
+    callback(result, err, response)
+  end
+
+  client = M.new({
+    path = opts.path,
+    on_connect = function()
+      local ok, err = client:write({
+        id = request_id,
+        method = opts.method,
+        params = opts.params or {},
+      })
+      if not ok then
+        finish(nil, { code = "socket_write_failed", message = err })
+      end
+    end,
+    on_message = function(message)
+      if message.id ~= request_id then
+        return
+      end
+      if message.error then
+        local err = type(message.error) == "table" and vim.deepcopy(message.error)
+          or { code = "api_error", message = tostring(message.error) }
+        err.message = err.message or tostring(err.code or "Herdr API request failed")
+        finish(nil, err, message)
+        return
+      end
+      finish(message.result, nil, message)
+    end,
+    on_error = function(err)
+      finish(nil, { code = "socket_error", message = err })
+    end,
+    on_close = function(reason)
+      finish(nil, { code = "socket_closed", message = "Herdr socket closed: " .. tostring(reason) })
+    end,
+  })
+
+  function request:kill()
+    if finished then
+      return
+    end
+    finished = true
+    close_timer()
+    client:close({ silent = true, reason = "cancelled" })
+  end
+
+  function request:close()
+    self:kill()
+  end
+
+  timer = uv.new_timer()
+  timer:start(opts.timeout_ms or 5000, 0, function()
+    vim.schedule(function()
+      finish(nil, { code = "timeout", message = "Herdr socket request timed out" })
+    end)
+  end)
+  client:connect()
+  return request
+end
+
 return M

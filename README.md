@@ -224,6 +224,7 @@ require("herdr-context").setup({
     position = "right", -- "left" or "right"
     width = 44,
     preview_lines = 80,
+    deep_preview_lines = 300,
     group_by = "workspace", -- "none", "workspace", or "tab"
     side_preview = true,
     preview_width = 64,
@@ -384,17 +385,21 @@ The native agent drawer is a scratch-buffer split. Its controls are:
 
 - `<CR>` or `t`: select the pane as the context target;
 - `f`: focus the Herdr pane;
-- `p`: preview the agent's recent output;
+- `p`: preview 80 lines of the agent's recent output;
+- `P`: request the deeper 300-line transcript;
 - `/`: filter agents by name, status, workspace, tab, path, or message;
 - `<Space>`: collapse or expand the workspace/tab group under the cursor;
 - `c`: clear the active filter;
 - `r`: force a state refresh;
 - `q`: close the drawer.
 
-Agents are grouped by workspace and tab by default. Output is read only when `p` is pressed, using
-`herdr agent read --source recent-unwrapped`; the drawer never reads agent output in the background.
-The adjacent preview uses `agents_view.preview_width`, while `agents_view.preview_lines` bounds the
-requested history. Press `r` inside the output pane to refresh it.
+Agents are grouped by workspace and tab by default. Output is read only when `p` or `P` is pressed;
+the drawer never reads agent output in the background. With a Herdr socket, previews use `agent.read`
+so truncation metadata is retained. A busy agent automatically falls back from alternate-screen
+history to its live viewport, and the preview labels both that fallback and any omitted older output.
+Without a socket, the text-only CLI remains the compatibility fallback. The adjacent preview uses
+`agents_view.preview_width`; `preview_lines` and `deep_preview_lines` bound the two transcript depths.
+Press `r` inside the output pane to refresh it.
 
 The `presence.notifications` flags opt into desktop-visible Neovim notifications when an existing
 agent transitions to `idle`, unseen `done`, or `blocked`. Initial snapshots do not notify, and all
