@@ -176,6 +176,26 @@ function M.agents()
   require("herdr-context.ui.agents").toggle()
 end
 
+function M.explain_agent(target)
+  local function open(agent)
+    require("herdr-context.ui.explain").open(agent)
+  end
+  if target then
+    open(target)
+    return
+  end
+  local cfg = config.get()
+  targets.resolve(cfg, picker, {}, function(agent, err)
+    if not agent then
+      if err ~= "Target selection cancelled" then
+        notify(err, vim.log.levels.ERROR)
+      end
+      return
+    end
+    open(agent)
+  end)
+end
+
 function M.history()
   return require("herdr-context.ui.history").toggle()
 end

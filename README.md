@@ -131,6 +131,7 @@ herdr plugin link /path/to/herdr-context.nvim
 | `:HerdrContextLocationList` | Stage the current window's location list |
 | `:HerdrContextTarget` | Choose or change the destination agent |
 | `:HerdrContextAgents` | Toggle the live agent drawer |
+| `:HerdrContextExplainAgent` | Explain how Herdr detected an agent and assigned its state |
 | `:HerdrContextHistory` | Inspect, clear, or restage session history |
 | `:HerdrContextRefresh` | Force a cached-state refresh |
 | `:checkhealth herdr-context` | Check Neovim, environment, Herdr, agents, and the companion plugin |
@@ -402,6 +403,7 @@ The native agent drawer is a scratch-buffer split. Its controls are:
 - `f`: focus the Herdr pane;
 - `p`: preview 80 lines of the agent's recent output;
 - `P`: request the deeper 300-line transcript;
+- `e`: show Herdr's agent-detection, matched-rule, lifecycle-authority, and evidence explanation;
 - `/`: filter agents by name, status, workspace, tab, path, or message;
 - `<Space>`: collapse or expand the workspace/tab group under the cursor;
 - `c`: clear the active filter;
@@ -415,6 +417,11 @@ history to its live viewport, and the preview labels both that fallback and any 
 Without a socket, the text-only CLI remains the compatibility fallback. The adjacent preview uses
 `agents_view.preview_width`; `preview_lines` and `deep_preview_lines` bound the two transcript depths.
 Press `r` inside the output pane to refresh it.
+
+`:HerdrContextExplainAgent` resolves a target and runs `herdr agent explain <pane> --json`. The same
+view is available with `e` in the drawer. It reports the final state, active and cached manifest
+versions, winning and evaluated rules, visible evidence, lifecycle authority, and fallback or skipped
+reasons. This is Herdr's authoritative detector output; the plugin does not duplicate screen parsing.
 
 The `presence.notifications` flags opt into desktop-visible Neovim notifications when an existing
 agent transitions to `idle`, unseen `done`, or `blocked`. Initial snapshots do not notify, and all

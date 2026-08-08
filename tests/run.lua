@@ -707,6 +707,25 @@ test("reads recent agent output with bounded text arguments", function()
   }, seen)
 end)
 
+test("requests and decodes Herdr agent detection explanations", function()
+  local original_run = herdr.run
+  local seen
+  herdr.run = function(_, args, callback)
+    seen = args
+    callback(vim.json.encode({ agent = "claude", state = "blocked", evaluated_rules = {} }), nil)
+    return { kill = function() end }
+  end
+  local explanation
+  herdr.explain_agent({}, "w0:p2", function(value, err)
+    truthy(value, err)
+    explanation = value
+  end)
+  herdr.run = original_run
+  eq({ "agent", "explain", "w0:p2", "--json" }, seen)
+  eq("claude", explanation.agent)
+  eq("blocked", explanation.state)
+end)
+
 test("reads agent output metadata through the socket API", function()
   local request
   local read
@@ -1765,6 +1784,61 @@ test("renders the drawer with stable pane mappings and actions", function()
   preview.close()
   herdr.read_agent = original_read_agent
 
+  local explain_request
+  local original_explain_agent = herdr.explain_agent
+  herdr.explain_agent = function(_, pane_id, callback)
+    explain_request = pane_id
+    callback({
+      agent = "claude",
+      state = "blocked",
+      manifest_source = "bundled",
+      manifest_version = "2026.06.10.2",
+      cached_remote_version = "2026.07.01.1",
+      matched_rule = { id = "permission_prompt", priority = 1100, region = "screen", state = "blocked" },
+      visible_blocker = true,
+      fallback_reason = "default_known_agent_idle_fallback",
+      evaluated_rules = {
+        {
+          id = "permission_prompt",
+          priority = 1100,
+          region = "screen",
+          state = "blocked",
+          matched = true,
+          evidence = { contains = { "Allow?" }, region_bytes = 6, region_preview = "Allow?" },
+        },
+      },
+    }, nil)
+    return { kill = function() end }
+  end
+  drawer.explain()
+  local explain = require("herdr-context.ui.explain")
+  local active_explain = explain._active()
+  truthy(active_explain)
+  eq("w0:p2", explain_request)
+  eq("herdr-context-explain", vim.bo[active_explain.bufnr].filetype)
+  local explanation_text = table.concat(vim.api.nvim_buf_get_lines(active_explain.bufnr, 0, -1, false), "\n")
+  contains(explanation_text, "Final state:")
+  contains(explanation_text, "blocked")
+  contains(explanation_text, "permission_prompt")
+  contains(explanation_text, "Cached remote version:")
+  contains(explanation_text, "default_known_agent_idle_fallback")
+  contains(explanation_text, "Allow?")
+  explain.close()
+  herdr.explain_agent = original_explain_agent
+
+  local authority = table.concat(
+    explain.format({
+      agent = "kimi",
+      state = "working",
+      screen_detection_skipped = true,
+      screen_detection_skip_reason = "full_lifecycle_hook_authority",
+      evaluated_rules = {},
+    }, { pane_id = "w0:p3" }),
+    "\n"
+  )
+  contains(authority, "full_lifecycle_hook_authority")
+  contains(authority, "No screen rules were evaluated")
+
   local original_input = vim.ui.input
   vim.ui.input = function(_, callback)
     callback("claude")
@@ -2410,6 +2484,7 @@ test("registers all user commands", function()
     "HerdrContextLocationList",
     "HerdrContextTarget",
     "HerdrContextAgents",
+    "HerdrContextExplainAgent",
     "HerdrContextHistory",
     "HerdrContextRefresh",
   }) do

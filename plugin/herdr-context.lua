@@ -67,6 +67,10 @@ vim.api.nvim_create_user_command("HerdrContextAgents", function()
   require("herdr-context").agents()
 end, { desc = "Toggle the live Herdr agent drawer" })
 
+vim.api.nvim_create_user_command("HerdrContextExplainAgent", function()
+  require("herdr-context").explain_agent()
+end, { desc = "Explain Herdr agent detection and status" })
+
 vim.api.nvim_create_user_command("HerdrContextHistory", function()
   require("herdr-context").history()
 end, { desc = "Toggle staged Herdr context history" })

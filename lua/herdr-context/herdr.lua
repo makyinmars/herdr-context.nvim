@@ -127,6 +127,26 @@ function M.get_agent(config, target, callback)
   return unwrap(json_command(config, { "agent", "get", target }))
 end
 
+function M.explain_agent(config, target, callback)
+  local function unwrap(decoded, err)
+    if not decoded then
+      return nil, err
+    end
+    local explanation = decoded.result and decoded.result.explain or decoded.explain or decoded
+    if type(explanation) ~= "table" or not explanation.state then
+      return nil, "Herdr agent explain response did not contain an explanation"
+    end
+    return explanation
+  end
+
+  if callback then
+    return json_command(config, { "agent", "explain", target, "--json" }, function(decoded, err)
+      callback(unwrap(decoded, err))
+    end)
+  end
+  return unwrap(json_command(config, { "agent", "explain", target, "--json" }))
+end
+
 function M.read_agent(config, pane_id, opts, callback)
   opts = opts or {}
   local source = opts.source or "recent-unwrapped"

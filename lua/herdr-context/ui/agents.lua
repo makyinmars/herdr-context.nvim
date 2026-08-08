@@ -246,7 +246,7 @@ function M.render()
   end
 
   lines[#lines + 1] = ""
-  lines[#lines + 1] = " <CR>/t target   f focus   p/P output/deep"
+  lines[#lines + 1] = " <CR>/t target   f focus   p/P output/deep   e explain"
   lines[#lines + 1] = " / filter   Space fold   r refresh   q close"
 
   vim.bo[bufnr].modifiable = true
@@ -322,6 +322,13 @@ function M.deep_preview()
   M.preview({ deep = true })
 end
 
+function M.explain()
+  local agent = selected_agent()
+  if agent then
+    require("herdr-context.ui.explain").open(agent, { source_winid = winid })
+  end
+end
+
 function M.filter()
   vim.ui.input({ prompt = "Filter Herdr agents: ", default = filter_text }, function(value)
     if value ~= nil then
@@ -352,6 +359,7 @@ end
 
 local function cleanup()
   require("herdr-context.ui.preview").close()
+  require("herdr-context.ui.explain").close()
   if subscriber then
     state.unsubscribe(subscriber)
     subscriber = nil
@@ -407,6 +415,7 @@ function M.open()
   map("f", M.focus, "Focus Herdr pane")
   map("p", M.preview, "Preview Herdr output")
   map("P", M.deep_preview, "Preview deep Herdr output")
+  map("e", M.explain, "Explain Herdr agent detection")
   map("/", M.filter, "Filter Herdr agents")
   map(" ", M.toggle_group, "Toggle Herdr agent group")
   map("c", function()
