@@ -321,6 +321,34 @@ function M.focus(config, pane_id, callback)
   return M.run(config, { "agent", "focus", pane_id }, callback)
 end
 
+function M.version_meets_minimum(version, minimum)
+  local function parts(str)
+    if type(str) ~= "string" then
+      return nil
+    end
+    local major, minor, patch = str:match("^(%d+)%.(%d+)%.(%d+)")
+    if not major then
+      return nil
+    end
+    return { tonumber(major), tonumber(minor), tonumber(patch) }
+  end
+
+  local version_parts = parts(version)
+  local minimum_parts = parts(minimum)
+  if not version_parts or not minimum_parts then
+    return nil
+  end
+
+  for i = 1, 3 do
+    if version_parts[i] > minimum_parts[i] then
+      return true
+    elseif version_parts[i] < minimum_parts[i] then
+      return false
+    end
+  end
+  return true
+end
+
 function M.executable(config)
   local bin = binary(config)
   if bin:find("/", 1, true) then

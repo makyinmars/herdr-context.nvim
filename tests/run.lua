@@ -708,6 +708,25 @@ test("reports a missing Herdr executable instead of throwing", function()
   contains(err, "Could not start Herdr")
 end)
 
+test("treats a Herdr version equal to the minimum as meeting it", function()
+  eq(true, herdr.version_meets_minimum("0.5.0", "0.5.0"))
+end)
+
+test("treats a Herdr version above the minimum as meeting it", function()
+  eq(true, herdr.version_meets_minimum("0.6.1", "0.5.0"))
+  eq(true, herdr.version_meets_minimum("1.0.0", "0.5.0"))
+end)
+
+test("treats a Herdr version below the minimum as not meeting it", function()
+  eq(false, herdr.version_meets_minimum("0.4.9", "0.5.0"))
+  eq(false, herdr.version_meets_minimum("0.5.0", "1.0.0"))
+end)
+
+test("treats an unparseable Herdr version as unknown rather than failing", function()
+  eq(nil, herdr.version_meets_minimum("unknown", "0.5.0"))
+  eq(nil, herdr.version_meets_minimum(nil, "0.5.0"))
+end)
+
 test("reads recent agent output with bounded text arguments", function()
   local seen
   local original_run = herdr.run

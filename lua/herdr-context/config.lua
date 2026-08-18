@@ -8,6 +8,7 @@ local defaults = {
   remember_target = "session",
   auto_select = true,
   herdr_bin = nil,
+  min_herdr_version = "0.7.5",
   multiline_strategy = "auto",
   bracketed_paste_agents = {
     claude = true,
