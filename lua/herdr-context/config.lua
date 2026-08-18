@@ -8,6 +8,7 @@ local defaults = {
   remember_target = "session",
   auto_select = true,
   herdr_bin = nil,
+  min_herdr_version = "0.7.5",
   multiline_strategy = "auto",
   bracketed_paste_agents = {
     claude = true,
@@ -48,7 +49,15 @@ local defaults = {
       "token%s*[:=]%s*%S+",
       "secret%s*[:=]%s*%S+",
       "password%s*[:=]%s*%S+",
+      "gh[pousr]_%w+",
+      "xox[baprs]%-[%w%-]+",
+      '"type"%s*:%s*"service_account"',
+      "eyJ[%w_%-]+%.eyJ[%w_%-]+%.[%w_%-]+",
     },
+    entropy_enabled = true,
+    entropy_threshold = 4.5,
+    entropy_min_length = 20,
+    entropy_keywords = { "key", "secret", "token", "password", "credential" },
   },
   history = {
     enabled = true,

@@ -76,6 +76,49 @@ local function section_text(section)
   return table.concat(parts, "\n")
 end
 
+function M.shannon_entropy(str)
+  if not str or #str == 0 then
+    return 0
+  end
+  local counts = {}
+  for i = 1, #str do
+    local byte = str:byte(i)
+    counts[byte] = (counts[byte] or 0) + 1
+  end
+  local length = #str
+  local entropy = 0
+  for _, count in pairs(counts) do
+    local p = count / length
+    entropy = entropy - p * (math.log(p) / math.log(2))
+  end
+  return entropy
+end
+
+local function has_keyword(line, keywords)
+  local lower = line:lower()
+  for _, keyword in ipairs(keywords) do
+    if lower:find(keyword, 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
+local function line_has_high_entropy_secret(line, options)
+  if not options.entropy_enabled then
+    return false
+  end
+  if not has_keyword(line, options.entropy_keywords) then
+    return false
+  end
+  for token in line:gmatch("%S+") do
+    if #token >= options.entropy_min_length and M.shannon_entropy(token) >= options.entropy_threshold then
+      return true
+    end
+  end
+  return false
+end
+
 function M.scan(sections, options)
   options = options or config.get().safety
   if not options.enabled then
@@ -85,6 +128,7 @@ function M.scan(sections, options)
   for _, section in ipairs(sections) do
     local text = section_text(section)
     local lower = text:lower()
+    local flagged = false
     for index, pattern in ipairs(options.secret_patterns) do
       local ok, found = pcall(string.find, text, pattern)
       if ok and not found then
@@ -92,7 +136,16 @@ function M.scan(sections, options)
       end
       if ok and found then
         warnings[#warnings + 1] = ("%s may contain a secret (pattern %d)"):format(section.title, index)
+        flagged = true
         break
+      end
+    end
+    if not flagged then
+      for line in text:gmatch("[^\n]+") do
+        if line_has_high_entropy_secret(line, options) then
+          warnings[#warnings + 1] = ("%s may contain a secret (high-entropy value)"):format(section.title)
+          break
+        end
       end
     end
   end

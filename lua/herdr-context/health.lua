@@ -152,6 +152,15 @@ function M.check()
   health.ok(
     ("Connected to Herdr %s (protocol %s)"):format(snapshot.version or "unknown", snapshot.protocol or "unknown")
   )
+  local meets_minimum = herdr.version_meets_minimum(snapshot.version, cfg.min_herdr_version)
+  if meets_minimum == false then
+    health.warn(
+      ("Herdr %s is older than the minimum supported version %s; some features may not work"):format(
+        snapshot.version,
+        cfg.min_herdr_version
+      )
+    )
+  end
 
   local candidates = targets.candidates(snapshot, { scope = cfg.target_scope })
   if #candidates > 0 then
