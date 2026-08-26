@@ -4,6 +4,10 @@ All notable changes to `herdr-context.nvim` are documented here.
 
 ## Unreleased
 
+## 0.5.0 - 2026-08-26
+
+- Expand secret warnings with GitHub, Slack, GCP service-account, JWT, and same-line entropy detection.
+- Warn in `:checkhealth herdr-context` when the connected Herdr version is older than the configurable minimum.
 - Add Windows support with a PowerShell companion picker, named-pipe presence checks, drive/UNC-aware path matching and references, exact transport coverage, and Windows CI.
 - Open the companion target picker as a true 80%-wide, 20-row Herdr popup that stays out of layouts, snapshots, and pane lifecycle events.
 - Add `:HerdrContextDelegate <kind> [preset]` to review a composer bundle, create a split/tab/workspace agent, start and prompt it, and optionally wait for and preview its result.

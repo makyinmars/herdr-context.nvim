@@ -150,6 +150,7 @@ require("herdr-context").setup({
   max_payload_bytes = 64 * 1024,
   target_scope = "workspace", -- "tab", "workspace", "project", or "session"
   remember_target = "session", -- "none", "session", or "workspace"
+  min_herdr_version = "0.7.5",
 
   composer = {
     layout = "float",
@@ -186,7 +187,16 @@ require("herdr-context").setup({
       "token%s*[:=]%s*%S+",
       "secret%s*[:=]%s*%S+",
       "password%s*[:=]%s*%S+",
+      "gh[pousr]_%w+",
+      "github_pat_[%w_]+",
+      "xox[baprs]%-[%w%-]+",
+      '"type"%s*:%s*"service_account"',
+      "eyJ[%w_%-]+%.eyJ[%w_%-]+%.[%w_%-]+",
     },
+    entropy_enabled = true,
+    entropy_threshold = 4.5,
+    entropy_min_length = 20,
+    entropy_keywords = { "key", "secret", "token", "password", "credential" },
   },
 
   history = {
@@ -562,6 +572,9 @@ Safety exclusions are applied before bundle construction. Current-buffer section
 Selected content is also checked against `safety.secret_patterns`. The composer shows warnings and
 requires a second `s` press after review; direct staging commands use an explicit confirmation picker.
 Changing the payload invalidates an earlier confirmation. Safety checks never print the matched secret.
+The default patterns cover AWS keys, private keys, common assignments, GitHub and Slack tokens, GCP
+service-account JSON, and JWTs. Entropy scanning also warns about long, unformatted values when a
+secret-related word or identifier part is on the same line.
 
 Successful stages are retained in memory up to `history.max_entries`. `:HerdrContextHistory` can inspect
 the exact payload, clear the list, or restage an entry. History is never written to disk and disappears

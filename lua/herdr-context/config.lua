@@ -8,6 +8,7 @@ local defaults = {
   remember_target = "session",
   auto_select = true,
   herdr_bin = nil,
+  min_herdr_version = "0.7.5",
   multiline_strategy = "auto",
   bracketed_paste_agents = {
     claude = true,
@@ -48,7 +49,16 @@ local defaults = {
       "token%s*[:=]%s*%S+",
       "secret%s*[:=]%s*%S+",
       "password%s*[:=]%s*%S+",
+      "gh[pousr]_%w+",
+      "github_pat_[%w_]+",
+      "xox[baprs]%-[%w%-]+",
+      '"type"%s*:%s*"service_account"',
+      "eyJ[%w_%-]+%.eyJ[%w_%-]+%.[%w_%-]+",
     },
+    entropy_enabled = true,
+    entropy_threshold = 4.5,
+    entropy_min_length = 20,
+    entropy_keywords = { "key", "secret", "token", "password", "credential" },
   },
   history = {
     enabled = true,
@@ -128,6 +138,7 @@ local function validate(opts)
     target_scope = { opts.target_scope, "string" },
     remember_target = { opts.remember_target, "string" },
     auto_select = { opts.auto_select, "boolean" },
+    min_herdr_version = { opts.min_herdr_version, "string" },
     multiline_strategy = { opts.multiline_strategy, "string" },
     bracketed_paste_agents = { opts.bracketed_paste_agents, "table" },
     composer = { opts.composer, "table" },
@@ -174,6 +185,10 @@ local function validate(opts)
     ["safety.confirm_warnings"] = { opts.safety.confirm_warnings, "boolean" },
     ["safety.exclude_patterns"] = { opts.safety.exclude_patterns, "table" },
     ["safety.secret_patterns"] = { opts.safety.secret_patterns, "table" },
+    ["safety.entropy_enabled"] = { opts.safety.entropy_enabled, "boolean" },
+    ["safety.entropy_threshold"] = { opts.safety.entropy_threshold, "number" },
+    ["safety.entropy_min_length"] = { opts.safety.entropy_min_length, "number" },
+    ["safety.entropy_keywords"] = { opts.safety.entropy_keywords, "table" },
     ["history.enabled"] = { opts.history.enabled, "boolean" },
     ["history.max_entries"] = { opts.history.max_entries, "number" },
     ["providers.symbol"] = { opts.providers.symbol, "table" },
@@ -190,6 +205,10 @@ local function validate(opts)
 
   if opts.max_payload_bytes <= 0 or opts.max_payload_bytes % 1 ~= 0 then
     error("herdr-context: max_payload_bytes must be a positive integer")
+  end
+  local minimum_version = vim.version.parse(opts.min_herdr_version)
+  if not minimum_version or tostring(minimum_version) ~= opts.min_herdr_version then
+    error("herdr-context: min_herdr_version must be a semantic version such as 0.7.5")
   end
 
   validate_choice("target_scope", opts.target_scope, { "tab", "workspace", "project", "session" })
@@ -234,6 +253,17 @@ local function validate(opts)
       if type(pattern) ~= "string" or pattern == "" then
         error("herdr-context: safety." .. key .. " entries must be non-empty strings")
       end
+    end
+  end
+  if opts.safety.entropy_threshold <= 0 or opts.safety.entropy_threshold > 8 then
+    error("herdr-context: safety.entropy_threshold must be greater than zero and at most 8")
+  end
+  if opts.safety.entropy_min_length <= 0 or opts.safety.entropy_min_length % 1 ~= 0 then
+    error("herdr-context: safety.entropy_min_length must be a positive integer")
+  end
+  for _, keyword in ipairs(opts.safety.entropy_keywords) do
+    if type(keyword) ~= "string" or keyword == "" then
+      error("herdr-context: safety.entropy_keywords entries must be non-empty strings")
     end
   end
   if opts.history.max_entries <= 0 or opts.history.max_entries % 1 ~= 0 then

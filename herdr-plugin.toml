@@ -1,6 +1,6 @@
 id = "herdr-context"
 name = "Herdr Context"
-version = "0.4.1"
+version = "0.5.0"
 min_herdr_version = "0.7.5"
 description = "See live Herdr agents and stage structured Neovim context without submitting it"
 platforms = ["linux", "macos", "windows"]

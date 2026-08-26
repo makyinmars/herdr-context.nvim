@@ -321,6 +321,23 @@ function M.focus(config, pane_id, callback)
   return M.run(config, { "agent", "focus", pane_id }, callback)
 end
 
+local function parse_version(value)
+  if type(value) ~= "string" then
+    return nil
+  end
+  local parsed = vim.version.parse(value)
+  return parsed and tostring(parsed) == value and parsed or nil
+end
+
+function M.version_meets_minimum(version, minimum)
+  local current = parse_version(version)
+  local required = parse_version(minimum)
+  if not current or not required then
+    return nil
+  end
+  return vim.version.cmp(current, required) >= 0
+end
+
 function M.executable(config)
   local bin = binary(config)
   if bin:find("/", 1, true) then

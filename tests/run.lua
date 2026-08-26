@@ -708,6 +708,43 @@ test("reports a missing Herdr executable instead of throwing", function()
   contains(err, "Could not start Herdr")
 end)
 
+test("treats a Herdr version equal to the minimum as meeting it", function()
+  eq(true, herdr.version_meets_minimum("0.5.0", "0.5.0"))
+end)
+
+test("treats a Herdr version above the minimum as meeting it", function()
+  eq(true, herdr.version_meets_minimum("0.6.1", "0.5.0"))
+  eq(true, herdr.version_meets_minimum("1.0.0", "0.5.0"))
+end)
+
+test("treats a Herdr version below the minimum as not meeting it", function()
+  eq(false, herdr.version_meets_minimum("0.4.9", "0.5.0"))
+  eq(false, herdr.version_meets_minimum("0.5.0", "1.0.0"))
+  eq(false, herdr.version_meets_minimum("0.5.0-rc.1", "0.5.0"))
+end)
+
+test("treats an unparseable Herdr version as unknown rather than failing", function()
+  eq(nil, herdr.version_meets_minimum("unknown", "0.5.0"))
+  eq(nil, herdr.version_meets_minimum(nil, "0.5.0"))
+  eq(nil, herdr.version_meets_minimum("0.4.9garbage", "0.5.0"))
+end)
+
+test("validates minimum-version and entropy settings during setup", function()
+  local invalid = {
+    { { min_herdr_version = "0.7" }, "min_herdr_version" },
+    { { safety = { entropy_enabled = "yes" } }, "safety.entropy_enabled" },
+    { { safety = { entropy_threshold = 9 } }, "safety.entropy_threshold" },
+    { { safety = { entropy_min_length = 0 } }, "safety.entropy_min_length" },
+    { { safety = { entropy_keywords = { "" } } }, "safety.entropy_keywords" },
+  }
+  for _, case in ipairs(invalid) do
+    local ok, err = pcall(config.setup, case[1])
+    eq(false, ok)
+    contains(tostring(err), case[2])
+  end
+  config.setup({})
+end)
+
 test("reads recent agent output with bounded text arguments", function()
   local seen
   local original_run = herdr.run
@@ -2394,6 +2431,131 @@ test("excludes sensitive paths and detects secret-like content", function()
   })
   eq(1, #warnings)
   contains(warnings[1], "may contain a secret")
+end)
+
+test("detects GitHub PAT, Slack token, and GCP service account key patterns", function()
+  local safety = require("herdr-context.safety")
+  config.setup({})
+
+  local gh_warnings = safety.scan({
+    { id = "a", title = "GitHub", format = "text", content = "token = ghp_" .. string.rep("a1B2c3", 6) },
+  })
+  eq(1, #gh_warnings)
+
+  local fine_grained_gh_warnings = safety.scan({
+    {
+      id = "a2",
+      title = "GitHub",
+      format = "text",
+      content = "github_pat_11FAKE_" .. string.rep("a1B2c3", 8),
+    },
+  })
+  eq(1, #fine_grained_gh_warnings)
+
+  local slack_warnings = safety.scan({
+    {
+      id = "b",
+      title = "Slack",
+      format = "text",
+      content = "SLACK_TOKEN=xoxb-FAKE-EXAMPLE-NOT-A-REAL-TOKEN-xyz",
+    },
+  })
+  eq(1, #slack_warnings)
+
+  local gcp_warnings = safety.scan({
+    { id = "c", title = "GCP", format = "text", content = '{"type": "service_account", "project_id": "demo"}' },
+  })
+  eq(1, #gcp_warnings)
+
+  local clean_warnings = safety.scan({
+    { id = "d", title = "Clean", format = "text", content = "just a normal sentence about tokens of appreciation" },
+  })
+  eq(0, #clean_warnings)
+end)
+
+test("detects JWT structure", function()
+  local safety = require("herdr-context.safety")
+  config.setup({})
+
+  local jwt_warnings = safety.scan({
+    {
+      id = "e",
+      title = "JWT",
+      format = "text",
+      content = "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    },
+  })
+  eq(1, #jwt_warnings)
+
+  local not_jwt_warnings = safety.scan({
+    { id = "f", title = "Not JWT", format = "text", content = "path.to.file and another.dotted.value" },
+  })
+  eq(0, #not_jwt_warnings)
+end)
+
+test("flags high-entropy strings only when a secret keyword is nearby", function()
+  local safety = require("herdr-context.safety")
+  config.setup({})
+
+  -- "internal_ref" is not one of the built-in literal patterns, so this only
+  -- gets flagged if entropy-based detection with keyword proximity kicks in.
+  local high_entropy_with_keyword = safety.scan({
+    {
+      id = "g",
+      title = "Config",
+      format = "text",
+      content = "internal_credential_id = aB3$kL9zXq7mVn2Wp5Rt8Yc4Ue1Sh6Jo",
+    },
+  })
+  eq(1, #high_entropy_with_keyword)
+
+  local high_entropy_without_keyword = safety.scan({
+    { id = "h", title = "Random", format = "text", content = "aB3$kL9zXq7mVn2Wp5Rt8Yc4Ue1Sh6Jo appeared in the log" },
+  })
+  eq(0, #high_entropy_without_keyword)
+
+  local keyword_without_high_entropy = safety.scan({
+    { id = "i", title = "Low entropy", format = "text", content = "some_credential_note = aaaaaaaaaaaaaaaaaaaaaaaa" },
+  })
+  eq(0, #keyword_without_high_entropy)
+
+  local unrelated_keyword_substring = safety.scan({
+    {
+      id = "i2",
+      title = "Unrelated",
+      format = "text",
+      content = "monkey aB3$kL9zXq7mVn2Wp5Rt8Yc4Ue1Sh6Jo",
+    },
+  })
+  eq(0, #unrelated_keyword_substring)
+
+  local camel_case_keyword = safety.scan({
+    {
+      id = "i3",
+      title = "Camel case",
+      format = "text",
+      content = "apiCredential = aB3$kL9zXq7mVn2Wp5Rt8Yc4Ue1Sh6Jo",
+    },
+  })
+  eq(1, #camel_case_keyword)
+end)
+
+test("computes Shannon entropy of a string", function()
+  local safety = require("herdr-context.safety")
+  local low = safety.shannon_entropy("aaaaaaaaaaaa")
+  local high = safety.shannon_entropy("Kx9#mQ2$vL7pR4tZ8wN1yB6c")
+  truthy(low < 1, "expected low entropy for repeated characters")
+  truthy(high > 4.5, "expected high entropy for randomized token")
+end)
+
+test("does not flag short high-entropy tokens below the minimum length", function()
+  local safety = require("herdr-context.safety")
+  config.setup({})
+
+  local warnings = safety.scan({
+    { id = "j", title = "Short token", format = "text", content = "secret_id = aB3$kL9z" },
+  })
+  eq(0, #warnings)
 end)
 
 test("bounds immutable session history and renders it", function()
