@@ -28,6 +28,7 @@ local base_subscriptions = {
   "workspace.renamed",
   "workspace.moved",
   "workspace.closed",
+  "workspace.reordered",
   "layout.updated",
 }
 
@@ -73,22 +74,10 @@ local function stop_reconnect()
   reconnect_timer = nil
 end
 
-local function version_at_least(version, major, minor)
-  local current_major, current_minor = tostring(version or ""):match("^(%d+)%.(%d+)")
-  current_major, current_minor = tonumber(current_major), tonumber(current_minor)
-  if not current_major then
-    return false
-  end
-  return current_major > major or (current_major == major and current_minor >= minor)
-end
-
 local function subscriptions()
   local result = {}
   for _, event_type in ipairs(base_subscriptions) do
     result[#result + 1] = { type = event_type }
-  end
-  if version_at_least(state.get().version, 0, 8) then
-    result[#result + 1] = { type = "workspace.reordered" }
   end
   return result
 end

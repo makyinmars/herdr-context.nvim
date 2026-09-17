@@ -69,6 +69,9 @@ function M.sanitize(section, request, options)
 end
 
 local function section_text(section)
+  if type(section.rendered) == "string" and section.rendered ~= "" then
+    return section.rendered
+  end
   local parts = { section.content or "" }
   for _, item in ipairs(section.items or {}) do
     parts[#parts + 1] = item.message or item.text or ""

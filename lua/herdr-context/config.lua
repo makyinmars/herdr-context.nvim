@@ -8,21 +8,27 @@ local defaults = {
   remember_target = "session",
   auto_select = true,
   herdr_bin = nil,
-  min_herdr_version = "0.7.5",
+  min_herdr_version = "0.9.1",
   multiline_strategy = "auto",
   bracketed_paste_agents = {
     claude = true,
     codex = true,
+    grok = true,
+    opencode = true,
   },
   context_file_dir = nil,
   composer = {
     layout = "float",
-    width = 0.92,
-    height = 0.8,
-    checklist_width = 0.38,
+    width = 0.56,
+    height = 0.72,
     provider_timeout_ms = 1500,
     hunk_context_lines = 3,
     preview = true,
+    include = "reference",
+    hide_empty = true,
+    attach_empty_diagnostics = false,
+    agent_picker = "inline",
+    embed_unsaved = "ask",
     defaults = {
       selection = true,
       symbol = true,
@@ -175,10 +181,14 @@ local function validate(opts)
     ["composer.layout"] = { opts.composer.layout, "string" },
     ["composer.width"] = { opts.composer.width, "number" },
     ["composer.height"] = { opts.composer.height, "number" },
-    ["composer.checklist_width"] = { opts.composer.checklist_width, "number" },
     ["composer.provider_timeout_ms"] = { opts.composer.provider_timeout_ms, "number" },
     ["composer.hunk_context_lines"] = { opts.composer.hunk_context_lines, "number" },
     ["composer.preview"] = { opts.composer.preview, "boolean" },
+    ["composer.include"] = { opts.composer.include, "string" },
+    ["composer.hide_empty"] = { opts.composer.hide_empty, "boolean" },
+    ["composer.attach_empty_diagnostics"] = { opts.composer.attach_empty_diagnostics, "boolean" },
+    ["composer.agent_picker"] = { opts.composer.agent_picker, "string" },
+    ["composer.embed_unsaved"] = { opts.composer.embed_unsaved, "string" },
     ["composer.defaults"] = { opts.composer.defaults, "table" },
     ["composer.presets"] = { opts.composer.presets, "table" },
     ["safety.enabled"] = { opts.safety.enabled, "boolean" },
@@ -208,7 +218,7 @@ local function validate(opts)
   end
   local minimum_version = vim.version.parse(opts.min_herdr_version)
   if not minimum_version or tostring(minimum_version) ~= opts.min_herdr_version then
-    error("herdr-context: min_herdr_version must be a semantic version such as 0.7.5")
+    error("herdr-context: min_herdr_version must be a semantic version such as 0.9.1")
   end
 
   validate_choice("target_scope", opts.target_scope, { "tab", "workspace", "project", "session" })
@@ -217,15 +227,15 @@ local function validate(opts)
   validate_choice("agents_view.position", opts.agents_view.position, { "left", "right" })
   validate_choice("agents_view.group_by", opts.agents_view.group_by, { "none", "workspace", "tab" })
   validate_choice("composer.layout", opts.composer.layout, { "float" })
+  validate_choice("composer.include", opts.composer.include, { "reference", "content" })
+  validate_choice("composer.agent_picker", opts.composer.agent_picker, { "inline", "select" })
+  validate_choice("composer.embed_unsaved", opts.composer.embed_unsaved, { "ask", "always", "never" })
 
   for _, key in ipairs({ "width", "height" }) do
     local value = opts.composer[key]
     if value <= 0 then
       error("herdr-context: composer." .. key .. " must be greater than zero")
     end
-  end
-  if opts.composer.checklist_width <= 0 or opts.composer.checklist_width >= 1 then
-    error("herdr-context: composer.checklist_width must be between zero and one")
   end
   if opts.composer.provider_timeout_ms <= 0 or opts.composer.provider_timeout_ms % 1 ~= 0 then
     error("herdr-context: composer.provider_timeout_ms must be a positive integer")

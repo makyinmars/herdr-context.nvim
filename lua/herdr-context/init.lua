@@ -1,8 +1,8 @@
 local M = {}
 
+local bundle = require("herdr-context.bundle")
 local config = require("herdr-context.config")
 local context = require("herdr-context.context")
-local format = require("herdr-context.format")
 local picker = require("herdr-context.picker")
 local safety = require("herdr-context.safety")
 local state = require("herdr-context.state")
@@ -38,29 +38,17 @@ local function stage(kind, opts)
     return
   end
 
-  local payload, err
-  if kind == "reference" then
-    payload, err = format.reference(captured)
-  elseif kind == "content" then
-    payload = format.content(captured)
-  elseif kind == "diagnostics" then
-    payload = format.diagnostics(captured, context.diagnostics(captured))
-  else
-    notify("Unknown context operation: " .. tostring(kind), vim.log.levels.ERROR)
-    return
-  end
-
-  if not payload then
+  local built, err = bundle.build_capture(kind, captured, {
+    diagnostics = kind == "diagnostics" and context.diagnostics(captured) or nil,
+    max_bytes = cfg.max_payload_bytes,
+  })
+  if not built then
     notify(err, vim.log.levels.ERROR)
     return
   end
-  payload, err = format.validate(payload, cfg.max_payload_bytes)
-  if not payload then
-    notify(err, vim.log.levels.ERROR)
-    return
-  end
+  local payload = built.payload
 
-  local warnings = safety.scan({ { title = "Context", content = payload } }, cfg.safety)
+  local warnings = safety.scan(built.sections, cfg.safety)
   safety.confirm(warnings, function(confirmed)
     if not confirmed then
       return

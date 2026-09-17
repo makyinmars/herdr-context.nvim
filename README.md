@@ -1,7 +1,7 @@
 # herdr-context.nvim
 
-See live [Herdr](https://herdr.dev) agents inside Neovim and stage code context in their prompts without
-submitting it.
+See live [Herdr](https://herdr.dev) agents inside Neovim and stage file references in their prompts without
+submitting them.
 
 `herdr-context.nvim` is one repository with two install surfaces:
 
@@ -11,7 +11,7 @@ submitting it.
 ## Requirements
 
 - Neovim 0.10 or newer
-- Herdr 0.7.5 or newer
+- Herdr 0.9.1 or newer
 - `jq` for the optional Herdr popup target picker on Linux and macOS
 - Windows PowerShell 5.1 or newer for the optional picker on Windows
 
@@ -25,9 +25,6 @@ Install the Herdr side:
 ```sh
 herdr plugin install makyinmars/herdr-context.nvim
 ```
-
-Herdr 0.7.5 stores installed and linked plugins globally. If this companion plugin was installed only
-inside a named Herdr 0.7.3 session, run the install command again after upgrading.
 
 Install the Neovim side with lazy.nvim:
 
@@ -150,13 +147,17 @@ require("herdr-context").setup({
   max_payload_bytes = 64 * 1024,
   target_scope = "workspace", -- "tab", "workspace", "project", or "session"
   remember_target = "session", -- "none", "session", or "workspace"
-  min_herdr_version = "0.7.5",
+  min_herdr_version = "0.9.1",
 
   composer = {
     layout = "float",
-    width = 0.92,
-    height = 0.8,
-    checklist_width = 0.38,
+    width = 0.56,
+    height = 0.72,
+    include = "reference", -- "reference" or "content"
+    hide_empty = true,
+    attach_empty_diagnostics = false,
+    agent_picker = "inline", -- "inline" or "select"
+    embed_unsaved = "ask", -- "ask", "always", or "never"
     provider_timeout_ms = 1500,
     hunk_context_lines = 3,
     preview = true,
@@ -275,15 +276,17 @@ Additional transport options are available for unusual agents:
 require("herdr-context").setup({
   multiline_strategy = "auto", -- "auto", "bracketed_paste", or "context_file"
   bracketed_paste_agents = {
-    codex = true,
     claude = true,
+    codex = true,
+    grok = true,
+    opencode = true,
   },
   context_file_dir = nil, -- defaults to stdpath("cache") .. "/herdr-context"
   herdr_bin = nil, -- defaults to HERDR_BIN_PATH, then "herdr"
 })
 ```
 
-In `auto` mode, multiline payloads for Codex and Claude use terminal bracketed-paste sequences.
+In `auto` mode, multiline payloads for Claude, Codex, Grok, and OpenCode use terminal bracketed-paste sequences.
 Unknown agents receive a single-line reference to a temporary Markdown context file. This avoids
 injecting literal newline bytes into an agent that may interpret them as Enter.
 
@@ -295,16 +298,16 @@ Explicit submission (`S`, `<C-Enter>`, or `submit = true`) sends the original pa
 
 ## Context composer
 
-The two-pane composer freezes the source buffer, cursor, selection, changedtick, path, and working directory
+The composer freezes the source buffer, cursor, selection, changedtick, path, and working directory
 before providers begin. Providers collect independently, and one timeout or failure does not block the
-others. The polished left panel shows the attached context, source, target, message, warnings, and byte
-budget; the right pane contains the exact Markdown payload that will be staged.
+others. One stacked float shows the live agent list, the message, attached `@path#L…` references, and the
+exact payload that will be staged. Code is not dumped into the prompt unless you embed a row.
 
 For the fastest code-to-agent flow, select code in Visual mode and run `:HerdrContextPrompt` (or map
-`require("herdr-context").prompt()`). The message editor opens immediately inside Neovim with that exact
-selection attached. Write the thought you would otherwise type in the agent, then press `<C-Enter>` to
-send and submit it. `<C-s>` keeps the message and returns to the composer so you can inspect or adjust the
-attached context first. In Normal mode, the same action starts from the current line and discovers the
+`require("herdr-context").prompt()`). The message editor opens immediately inside the composer with that
+range attached as a reference. Write the thought you would otherwise type in the agent, then press
+`<C-Enter>` to send and submit it. `<C-s>` keeps the message so you can inspect or adjust attached
+references first. In Normal mode, the same action starts from the current line and discovers the
 containing symbol, hunk, and diagnostics.
 
 Tracking is opt-in for Lua callers. It submits through `agent prompt --wait` and observes the agent
@@ -356,32 +359,37 @@ prompt timeouts are reported without cancelling or duplicating the remote proces
 Normal mode selects the innermost symbol, the hunk under the cursor, and diagnostics scoped to the
 symbol (then the hunk). If neither symbol nor hunk is available, it selects the current line. Visual
 mode selects the exact Visual range and overlapping diagnostics, leaving symbol and hunk unchecked.
-Quickfix, location-list, and Trouble sources are deliberately opt-in defaults.
+Empty diagnostics are not attached. Quickfix, location-list, and Trouble sources stay collapsed until
+they have items.
 
 Composer controls are:
 
-- `<Space>`: toggle the provider under the cursor;
-- `i`: write or edit the freehand message included at the top of the bundle;
+- `<Space>`: attach or detach the reference under the cursor;
+- `e`: embed the buffer snippet for that row instead of a file reference;
+- `i`: focus the message editor;
+- `t` / `<CR>` on an agent row: pin that Herdr agent as the target;
 - `P`: apply a named provider preset;
-- `t`: choose a target and return to the composer;
 - `r`: recapture the source and rerun providers;
 - `s`: stage the exact preview (or stage and submit when `submit = true`);
-- `S`: explicitly send and submit now, regardless of the `submit` default;
-- `p`: toggle the full payload preview;
+- `S` / `<C-Enter>`: send with `herdr agent prompt`;
+- `p`: toggle the payload preview;
 - `h`: inspect the session staging history;
-- `<Tab>`: switch between checklist and preview panes;
+- `<C-h>` / `<C-j>` / `<C-k>` / `<C-l>`: move between composer panes (up/down, or wrap when there is no left/right pane);
+- `<Tab>`: cycle agent, message, references, and preview panes;
 - `?`: show the key reference;
 - `q` or `<Esc>`: cancel.
 
 Presets can also be selected directly with commands such as `:HerdrContextCompose debug`. Only available
-providers are selected. `i` opens a multiline Markdown message editor; keep it with `<C-s>`, send it with
-`<C-Enter>` (or `<M-Enter>` in terminals that do not distinguish Control-Enter), or cancel with `q` from
-Normal mode. Messages are rendered as a deterministic `## Instructions` section and are included in the
-same byte budget and exact-preview path as provider content.
+providers with content are selected. The message is included at the top of the payload as plain text.
+Keep it with `<C-s>`, send it with `<C-Enter>` (or `<M-Enter>` in terminals that do not distinguish
+Control-Enter), or cancel with `q` from Normal mode.
+
+If the buffer has unsaved changes, the composer warns before sending a disk reference. Press `e` to
+embed the live snippet, or press `s` again to send the path anyway.
 
 Editing the source buffer marks the preview stale and disables staging until it is refreshed. The
-combined final payload—including headings and Markdown fences—is rejected when it exceeds
-`max_payload_bytes`; sections are never silently truncated or dropped.
+combined final payload is rejected when it exceeds `max_payload_bytes`; sections are never silently
+truncated or dropped.
 
 The symbol provider asks every eligible LSP client for document symbols, deterministically chooses the
 smallest containing range, and falls back to Treesitter. The hunk provider prefers MiniDiff because it
@@ -529,15 +537,19 @@ keep that explicit pin across sends, or set `HERDR_CONTEXT_CONFIG` to override t
 
 ## Payloads
 
-Reference only:
+The composer default is a message plus file references:
 
 ```text
+Explain the snacks zen toggles.
+
 @lua/plugins/snacks.lua#L53-L60
 ```
 
-Reference with content:
+Press `e` on a row, or set `composer.include = "content"`, to embed the snippet:
 
 ````text
+Explain the snacks zen toggles.
+
 @lua/plugins/snacks.lua#L53-L60
 
 ```lua
@@ -549,18 +561,17 @@ zen = {
 ```
 ````
 
-Paths are relative to the Git root, falling back to Neovim's working directory. Modified buffers are
-marked `(unsaved changes)`. Content from unnamed buffers is allowed, but reference-only mode rejects it
-because it has no stable path. Markdown fences expand past the longest backtick run in the selection.
-Drive-letter and UNC paths are normalized and compared case-insensitively on Windows; context-file
-references use forward slashes so they remain unambiguous in agent prompts. Payloads over
-`max_payload_bytes` are rejected rather than truncated.
+`:HerdrContextReference` still stages a single `@path#L10-L20` line. `:HerdrContextSend` still embeds
+the selected code. Paths are relative to the Git root, falling back to Neovim's working directory.
+Modified buffers are marked `(unsaved changes)`. Unnamed buffers have no stable path, so they are
+embedded. Markdown fences expand past the longest backtick run in the selection. Drive-letter and UNC
+paths are normalized and compared case-insensitively on Windows; context-file references use forward
+slashes so they remain unambiguous in agent prompts. Payloads over `max_payload_bytes` are rejected
+rather than truncated.
 
-Diagnostics include severity, source, code, message, and source line:
+Diagnostics are compact lists, and they are omitted when empty:
 
 ```text
-Diagnostics for @src/index.ts#L18-L27:
-
 - ERROR [typescript:2345] L21: Argument is not assignable…
 - WARN [eslint:no-unused-vars] L24: `result` is assigned but never used.
 ```

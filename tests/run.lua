@@ -38,8 +38,8 @@ local function test(name, callback)
   end
 end
 
+local bundle = require("herdr-context.bundle")
 local context = require("herdr-context.context")
-local format = require("herdr-context.format")
 local config = require("herdr-context.config")
 local herdr = require("herdr-context.herdr")
 local socket = require("herdr-context.socket")
@@ -115,51 +115,50 @@ test("resolves non-Git paths relative to the supplied cwd", function()
   eq("/tmp/herdr-context-cwd", root)
 end)
 
-test("formats references relative to the Git root", function()
-  local payload =
-    format.reference({ relative_path = "lua/plugin.lua", unnamed = false, start_line = 10, end_line = 20 })
-  eq("@lua/plugin.lua#L10-L20", payload)
-end)
+local function with_staged_target(callback)
+  local staged
+  local original_stage = transport.stage
+  local original_resolve = targets.resolve
+  transport.stage = function(_, _, payload, cb)
+    staged = payload
+    cb(true, nil, { mode = "literal" })
+  end
+  targets.resolve = function(_, _, _, cb)
+    cb({ pane_id = "w0:p1", agent = "codex" })
+  end
+  local ok, err = pcall(callback)
+  transport.stage = original_stage
+  targets.resolve = original_resolve
+  if not ok then
+    error(err, 0)
+  end
+  return staged
+end
 
-test("marks modified content and chooses a longer Markdown fence", function()
-  local payload = format.content({
-    relative_path = "lua/plugin.lua",
-    unnamed = false,
-    start_line = 3,
-    end_line = 3,
-    modified = true,
-    filetype = "lua",
-    text = "local example = [[```]]",
-  })
-  contains(payload, "@lua/plugin.lua#L3 (unsaved changes)")
-  contains(payload, "````lua\n")
-  truthy(payload:sub(-4) == "````")
-end)
+test("stages Reference, Send, and Diagnostics through the bundle renderer", function()
+  config.setup({ presence = { enabled = false }, safety = { enabled = false } })
+  local bufnr = buffer({ "local value = 1", "local other = 2" }, vim.fn.getcwd() .. "/lua/plugin.lua")
+  vim.api.nvim_set_current_buf(bufnr)
 
-test("allows unnamed content but rejects unnamed references", function()
-  local captured = {
-    unnamed = true,
-    start_line = 1,
-    end_line = 1,
-    modified = true,
-    filetype = "lua",
-    text = "return true",
-  }
-  local reference, err = format.reference(captured)
-  eq(nil, reference)
-  contains(err, "named buffer")
-  contains(format.content(captured), "Unnamed buffer")
-end)
+  local staged = with_staged_target(function()
+    require("herdr-context").reference({ bufnr = bufnr, line1 = 1, line2 = 2 })
+  end)
+  eq("@lua/plugin.lua#L1-L2", staged)
+  truthy(not staged:find("local value", 1, true))
 
-test("enforces byte limits without truncating Unicode", function()
-  local payload, err = format.validate("é", 1)
-  eq(nil, payload)
-  contains(err, "2 bytes")
-  eq("é", format.validate("é", 2))
-end)
+  vim.bo[bufnr].modified = true
+  vim.api.nvim_buf_set_lines(bufnr, 0, 1, false, { "local example = [[```]]" })
+  staged = with_staged_target(function()
+    require("herdr-context").send({ bufnr = bufnr, line1 = 1, line2 = 1 })
+  end)
+  contains(staged, "@lua/plugin.lua#L1 (unsaved changes)")
+  contains(staged, "local example = [[```]]")
+  contains(staged, "````lua\n")
+  truthy(staged:sub(-4) == "````")
+  delete_buffer(bufnr)
 
-test("collects and formats diagnostics in the selected range", function()
-  local bufnr = buffer({ "one", "two", "three" }, vim.fn.getcwd() .. "/src/index.ts", "typescript")
+  bufnr = buffer({ "one", "two", "three" }, vim.fn.getcwd() .. "/src/index.ts", "typescript")
+  vim.api.nvim_set_current_buf(bufnr)
   local namespace = vim.api.nvim_create_namespace("herdr-context-test")
   vim.diagnostic.set(namespace, bufnr, {
     {
@@ -179,14 +178,50 @@ test("collects and formats diagnostics in the selected range", function()
       message = "Unused",
     },
   })
-  local captured = context.capture({ bufnr = bufnr, line1 = 2, line2 = 2 })
-  local diagnostics = context.diagnostics(captured)
-  eq(1, #diagnostics)
-  local payload = format.diagnostics(captured, diagnostics)
-  contains(payload, "Diagnostics for @src/index.ts#L2")
-  contains(payload, "- ERROR [typescript:2345] L2: Bad value")
+  staged = with_staged_target(function()
+    require("herdr-context").diagnostics({ bufnr = bufnr, line1 = 2, line2 = 2 })
+  end)
+  contains(staged, "- ERROR [typescript:2345] L2: Bad value")
+  truthy(not staged:find("Diagnostics for", 1, true))
+  truthy(not staged:find("local example", 1, true))
   vim.diagnostic.reset(namespace, bufnr)
   delete_buffer(bufnr)
+end)
+
+test("allows unnamed content but rejects unnamed references", function()
+  config.setup({ presence = { enabled = false }, safety = { enabled = false } })
+  local bufnr = buffer({ "return true" })
+  vim.api.nvim_set_current_buf(bufnr)
+  local staged = with_staged_target(function()
+    require("herdr-context").reference({ bufnr = bufnr, line = 1 })
+  end)
+  eq(nil, staged)
+  staged = with_staged_target(function()
+    require("herdr-context").send({ bufnr = bufnr, line = 1 })
+  end)
+  contains(staged, "Unnamed buffer")
+  contains(staged, "return true")
+  delete_buffer(bufnr)
+end)
+
+test("enforces byte limits without truncating Unicode", function()
+  local built = bundle.build({
+    { id = "t", title = "t", format = "text", content = "é" },
+  }, 1)
+  eq(true, built.oversized)
+  contains(built.error, "2 bytes")
+  eq("é", built.payload)
+  local ok, err = bundle.build_capture("content", {
+    unnamed = false,
+    relative_path = "a.lua",
+    start_line = 1,
+    end_line = 1,
+    text = "é",
+    filetype = "lua",
+    modified = false,
+  }, { max_bytes = 1 })
+  eq(nil, ok)
+  contains(err, "bytes")
 end)
 
 test("preserves Unix paths that contain Windows-like characters", function()
@@ -457,7 +492,7 @@ local function stage_and_wait(cfg, target, payload, opts)
   return unpack(values, 1, values.n)
 end
 
-test("passes file references literally for Codex and Claude without submitting", function()
+test("passes file references literally for Codex, Claude, Grok, and OpenCode without submitting", function()
   local reference = "@lua/plugins/herdr-context.lua#L13-L20"
   local log = vim.fn.tempname()
   vim.fn.writefile({}, log)
@@ -466,7 +501,7 @@ test("passes file references literally for Codex and Claude without submitting",
     herdr_bin = vim.fn.getcwd() .. "/tests/fixtures/fake-herdr.sh",
     submit = false,
   })
-  for index, agent in ipairs({ "codex", "claude" }) do
+  for index, agent in ipairs({ "codex", "claude", "grok", "opencode" }) do
     local target = { pane_id = "w0:p" .. tostring(index), agent = agent }
     local prepared, mode = transport.prepare(cfg, target, reference)
     eq(reference, prepared, agent)
@@ -478,18 +513,23 @@ test("passes file references literally for Codex and Claude without submitting",
   local output = read_log(log)
   contains(output, "target=w0:p1")
   contains(output, "target=w0:p2")
+  contains(output, "target=w0:p3")
+  contains(output, "target=w0:p4")
   truthy(not output:find("pane send%-keys"), "file references must not submit")
   vim.fn.delete(log)
 end)
 
-test("default transport wraps Codex multiline input and never presses Enter", function()
+test("default transport wraps Codex, Grok, and OpenCode multiline input and never presses Enter", function()
   local log = vim.fn.tempname()
   vim.fn.writefile({}, log)
   vim.env.FAKE_HERDR_LOG = log
   local cfg = config.setup({ herdr_bin = vim.fn.getcwd() .. "/tests/fixtures/fake-herdr.sh" })
-  local ok, err, result = stage_and_wait(cfg, { pane_id = "w1:p2", agent = "codex" }, "line one\nline two")
-  truthy(ok, err)
-  eq("bracketed_paste", result.mode)
+  for index, agent in ipairs({ "codex", "grok", "opencode" }) do
+    local ok, err, result =
+      stage_and_wait(cfg, { pane_id = "w1:p" .. tostring(index), agent = agent }, "line one\nline two")
+    truthy(ok, err)
+    eq("bracketed_paste", result.mode, agent)
+  end
   local output = read_log(log)
   contains(output, "pane send-text")
   truthy(not output:find("pane send%-keys"), "default transport must not send Enter")
@@ -1702,7 +1742,7 @@ test("socket request sends an envelope and returns its matching result", functio
   vim.fn.delete(path)
 end)
 
-test("watcher gates only the Herdr 0.8 workspace reorder event", function()
+test("watcher always subscribes to workspace.reordered", function()
   state._reset()
   watch.stop({ silent = true })
   local old_env = {
@@ -1737,7 +1777,7 @@ test("watcher gates only the Herdr 0.8 workspace reorder event", function()
   for _, expected in ipairs({ "pane.updated", "pane.focused", "tab.created", "workspace.updated", "layout.updated" }) do
     truthy(vim.tbl_contains(types, expected), "missing 0.7.5 subscription " .. expected)
   end
-  truthy(not vim.tbl_contains(types, "workspace.reordered"))
+  truthy(vim.tbl_contains(types, "workspace.reordered"), "workspace.reordered must be subscribed even before 0.8")
   watch.stop({ silent = true })
   vim.env.HERDR_ENV = old_env.HERDR_ENV
   vim.env.HERDR_SOCKET_PATH = old_env.HERDR_SOCKET_PATH
@@ -2233,6 +2273,7 @@ test("renders the drawer with stable pane mappings and actions", function()
   truthy(active_explain)
   eq("w0:p2", explain_request)
   eq("herdr-context-explain", vim.bo[active_explain.bufnr].filetype)
+  eq("editor", vim.api.nvim_win_get_config(active_explain.winid).relative)
   local explanation_text = table.concat(vim.api.nvim_buf_get_lines(active_explain.bufnr, 0, -1, false), "\n")
   contains(explanation_text, "Final state:")
   contains(explanation_text, "blocked")
@@ -2323,6 +2364,7 @@ test("cancels superseded output previews and ignores stale callbacks", function(
   callbacks["w0:p2"]("fresh output", nil)
   local active_preview = preview._active()
   eq({ "fresh output" }, vim.api.nvim_buf_get_lines(active_preview.bufnr, 0, -1, false))
+  eq("editor", vim.api.nvim_win_get_config(active_preview.winid).relative)
   preview.close()
   herdr.read_agent = original_read_agent
 end)
@@ -2362,7 +2404,7 @@ end)
 
 test("builds deterministic exact bundles with safe fences and deduplication", function()
   local bundle = require("herdr-context.bundle")
-  local built = bundle.build({
+  local sections = {
     {
       id = "diagnostics",
       title = "Diagnostics",
@@ -2391,16 +2433,29 @@ test("builds deterministic exact bundles with safe fences and deduplication", fu
       format = "text",
       fingerprint = "symbol:one",
     },
-  }, 64 * 1024)
+  }
+  local built = bundle.build(sections, 64 * 1024)
   truthy(built)
   eq(2, #built.sections)
   eq(#built.payload, built.bytes)
-  truthy(built.payload:find("## Current symbol", 1, true) < built.payload:find("## Diagnostics", 1, true))
-  contains(built.payload, "````lua\nlocal marker = [[```]]\n````")
+  eq("reference", built.include)
+  truthy(built.payload:find("@lua/sample.lua#L2-L4", 1, true) < built.payload:find("- ERROR", 1, true))
+  contains(built.payload, "@lua/sample.lua#L2-L4")
   contains(built.payload, "- ERROR [lua:12] L4: Bad value")
+  truthy(not built.payload:find("local marker", 1, true))
   truthy(not built.payload:find("must not render", 1, true))
+  truthy(not built.payload:find("Context bundle", 1, true))
 
-  local oversized = bundle.build(built.sections, 8)
+  local embedded = bundle.build(sections, 64 * 1024, { include = "content" })
+  contains(embedded.payload, "````lua\nlocal marker = [[```]]\n````")
+  contains(embedded.payload, "@lua/sample.lua#L2-L4")
+
+  local row_embed = vim.deepcopy(sections[2])
+  row_embed.embed = true
+  local mixed = bundle.build({ row_embed }, 64 * 1024)
+  contains(mixed.payload, "````lua\nlocal marker = [[```]]\n````")
+
+  local oversized = bundle.build(built.sections, 8, { include = "content" })
   eq(true, oversized.oversized)
   contains(oversized.error, tostring(oversized.bytes))
 end)
@@ -2579,6 +2634,7 @@ test("bounds immutable session history and renders it", function()
   eq("test3", history.get()[1].kind)
   local history_buf = history_ui.open()
   eq("herdr-context-history", vim.bo[history_buf].filetype)
+  eq("editor", vim.api.nvim_win_get_config(history_ui._active().winid).relative)
   local rendered = table.concat(vim.api.nvim_buf_get_lines(history_buf, 0, -1, false), "\n")
   contains(rendered, "test3")
   contains(rendered, "w0:p3")
@@ -2609,7 +2665,7 @@ test("deduplicates matching quickfix and Trouble items without dropping sections
   eq(2, #built.sections)
   eq(1, #built.sections[1].items)
   eq(0, #built.sections[2].items)
-  contains(built.payload, "## Trouble")
+  contains(built.payload, "Trouble")
   contains(built.payload, "No unique valid items")
 end)
 
@@ -2816,7 +2872,8 @@ test("opens the prompt editor with an exact Visual selection attached", function
   truthy(session)
   truthy(
     vim.wait(100, function()
-      return require("herdr-context.ui.instruction")._active() ~= nil
+      local ui = require("herdr-context.ui.composer")._active()
+      return ui and ui.message_winid == vim.api.nvim_get_current_win()
     end),
     "prompt message editor did not open"
   )
@@ -2825,7 +2882,6 @@ test("opens the prompt editor with an exact Visual selection attached", function
   eq(true, session.track)
   eq(120000, session.tracking_timeout_ms)
   eq(true, session.preview_result)
-  require("herdr-context.ui.instruction").close(session)
   session:close()
   delete_buffer(source)
 end)
@@ -2883,22 +2939,28 @@ test("marks composer payloads stale and renders exact preview in a native scratc
   eq("herdr-context-composer", vim.bo[ui_buf].filetype)
   local active_composer = composer_ui._active()
   truthy(active_composer.list_winid ~= active_composer.preview_winid)
+  truthy(active_composer.message_winid ~= active_composer.list_winid)
+  truthy(active_composer.agent_winid ~= active_composer.list_winid)
   eq("herdr-context-preview", vim.bo[active_composer.preview_bufnr].filetype)
   local rendered = table.concat(vim.api.nvim_buf_get_lines(ui_buf, 0, -1, false), "\n")
   local preview_rendered = table.concat(vim.api.nvim_buf_get_lines(active_composer.preview_bufnr, 0, -1, false), "\n")
   contains(preview_rendered, session.bundle.payload)
+  contains(preview_rendered, "@lua/composer-test.lua#L1")
+  truthy(not preview_rendered:find("return true", 1, true))
   contains(rendered, "s stage + submit")
-  local instruction_ui = require("herdr-context.ui.instruction")
-  local instruction_buf = instruction_ui.open(session)
+  local message_buf = composer_ui.edit_message(session)
   vim.cmd("stopinsert")
-  vim.api.nvim_buf_set_lines(instruction_buf, 0, -1, false, { "Keep the public API stable", "Add focused tests" })
-  instruction_ui.save()
+  vim.api.nvim_buf_set_lines(message_buf, 0, -1, false, { "Keep the public API stable", "Add focused tests" })
+  composer_ui.save_message()
   truthy(vim.wait(100, function()
     local payload = table.concat(vim.api.nvim_buf_get_lines(active_composer.preview_bufnr, 0, -1, false), "\n")
-    return payload:find("## Instructions", 1, true) ~= nil
+    return payload:find("Keep the public API stable", 1, true) ~= nil
   end))
   contains(session.bundle.payload, "Keep the public API stable")
   contains(session.bundle.payload, "Add focused tests")
+  contains(session.bundle.payload, "@lua/composer-test.lua#L1")
+  truthy(not session.bundle.payload:find("## Instructions", 1, true))
+  truthy(not session.bundle.payload:find("return true", 1, true))
 
   vim.api.nvim_buf_set_lines(source, 0, -1, false, { "return false" })
   eq(true, session:is_stale())
@@ -2910,6 +2972,57 @@ test("marks composer payloads stale and renders exact preview in a native scratc
   session:stage()
   transport.stage = original_transport_stage
   eq(0, stage_calls)
+  session:close()
+  delete_buffer(source)
+end)
+
+test("composer Ctrl-h/j/k/l moves between stacked panes", function()
+  local composer = require("herdr-context.composer")
+  local composer_ui = require("herdr-context.ui.composer")
+  config.setup({ presence = { enabled = false } })
+  local source = buffer({ "return 1" }, vim.fn.getcwd() .. "/lua/nav-test.lua")
+  vim.api.nvim_set_current_buf(source)
+  local request = composer.capture_request({ bufnr = source, winid = vim.api.nvim_get_current_win(), line = 1 })
+  local session = composer._create_session(request)
+  composer_ui.open(session)
+  local ui = composer_ui._active()
+  local function feed(keys)
+    vim.cmd("stopinsert")
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "xt", false)
+  end
+
+  eq(ui.list_winid, vim.api.nvim_get_current_win(), "composer opens on references")
+  feed("<C-k>")
+  eq(ui.message_winid, vim.api.nvim_get_current_win(), "C-k moves up to the message")
+  feed("<C-k>")
+  eq(ui.agent_winid, vim.api.nvim_get_current_win(), "C-k moves up to agents")
+  feed("<C-k>")
+  eq(ui.preview_winid, vim.api.nvim_get_current_win(), "C-k wraps to the preview")
+  feed("<C-j>")
+  eq(ui.agent_winid, vim.api.nvim_get_current_win(), "C-j wraps down to agents")
+  feed("<C-j>")
+  eq(ui.message_winid, vim.api.nvim_get_current_win(), "C-j moves down to the message")
+  feed("<C-j>")
+  eq(ui.list_winid, vim.api.nvim_get_current_win(), "C-j moves down to references")
+  feed("<C-l>")
+  eq(ui.preview_winid, vim.api.nvim_get_current_win(), "C-l advances when there is no pane to the right")
+  feed("<C-h>")
+  eq(ui.list_winid, vim.api.nvim_get_current_win(), "C-h goes back when there is no pane to the left")
+
+  vim.api.nvim_set_current_win(ui.message_winid)
+  vim.cmd("startinsert")
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-k>", true, false, true), "xt", false)
+  eq(ui.agent_winid, vim.api.nvim_get_current_win(), "insert C-k leaves the message for agents")
+
+  local mapped_insert_c_h = false
+  for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(ui.message_bufnr, "i")) do
+    local lhs = mapping.lhs or ""
+    if lhs:lower() == "<c-h>" then
+      mapped_insert_c_h = true
+    end
+  end
+  eq(false, mapped_insert_c_h, "insert C-h stays Neovim backspace")
+
   session:close()
   delete_buffer(source)
 end)
@@ -2945,8 +3058,12 @@ test("applies presets, requires sensitive-content confirmation, and records succ
   }
   eq(true, session:apply_preset("secure"))
   eq(true, session.selected.selection)
+  eq(0, #session.safety_warnings, "reference-only payloads do not scan unsent file contents")
+  session.include = "content"
+  composer._rebuild(session)
   truthy(session.bundle and session.bundle.payload)
   eq(1, #session.safety_warnings)
+  session.target = { pane_id = "w0:p9", agent = "codex" }
 
   local resolve_calls = 0
   local stage_calls = 0
@@ -2966,7 +3083,7 @@ test("applies presets, requires sensitive-content confirmation, and records succ
   session:stage()
   targets.resolve = original_resolve
   transport.stage = original_stage
-  eq(1, resolve_calls)
+  eq(0, resolve_calls, "inline picker uses the composer target")
   eq(1, stage_calls)
   eq(1, #history.get())
   eq("composer", history.get()[1].kind)
@@ -3000,7 +3117,11 @@ test("applies mode-aware composer defaults and current-line fallback", function(
         id = "diagnostics",
         name = "Diagnostics",
         status = "available",
-        section = { range = { start_line = 7, end_line = 7 } },
+        section = {
+          format = "diagnostics",
+          range = { start_line = 7, end_line = 7 },
+          items = { { severity = vim.diagnostic.severity.ERROR, lnum = 6, message = "bad" } },
+        },
       },
     }
   end
@@ -3029,6 +3150,108 @@ test("applies mode-aware composer defaults and current-line fallback", function(
   normal.entries[3].status = "unavailable"
   composer._apply_defaults(normal)
   eq(true, normal.selected.selection)
+
+  local empty = {
+    request = { selection = { mode = "v" } },
+    entries = {
+      {
+        id = "selection",
+        name = "Current selection",
+        status = "available",
+        section = { range = { start_line = 1, end_line = 2 } },
+      },
+      {
+        id = "diagnostics",
+        name = "Diagnostics",
+        status = "available",
+        section = { format = "diagnostics", items = {} },
+      },
+    },
+  }
+  composer._apply_defaults(empty)
+  eq(true, empty.selected.selection)
+  eq(false, empty.selected.diagnostics)
+end)
+
+test("composer stages references by default and embeds a row on demand", function()
+  local composer = require("herdr-context.composer")
+  config.setup({ presence = { enabled = false } })
+  local source = buffer({ "local value = 1" }, vim.fn.getcwd() .. "/lua/ref-test.lua")
+  local request = composer.capture_request({ bufnr = source, winid = vim.api.nvim_get_current_win(), line = 1 })
+  local session = composer._create_session(request)
+  session.entries = {
+    {
+      id = "selection",
+      name = "Current line",
+      status = "available",
+      section = {
+        id = "selection",
+        title = "Current line",
+        priority = 10,
+        reference = "@lua/ref-test.lua#L1",
+        language = "lua",
+        content = "local value = 1",
+        format = "code",
+        fingerprint = "selection:ref",
+      },
+    },
+  }
+  session.selected.selection = true
+  composer._rebuild(session)
+  contains(session.bundle.payload, "@lua/ref-test.lua#L1")
+  truthy(not session.bundle.payload:find("local value = 1", 1, true))
+  session:toggle_embed("selection")
+  contains(session.bundle.payload, "local value = 1")
+  contains(session.bundle.payload, "@lua/ref-test.lua#L1")
+  session:set_instruction("Explain this helper")
+  contains(session.bundle.payload, "Explain this helper")
+  truthy(
+    session.bundle.payload:find("Explain this helper", 1, true)
+      < session.bundle.payload:find("@lua/ref-test.lua#L1", 1, true)
+  )
+  session:close()
+  delete_buffer(source)
+end)
+
+test("composer inline picker remembers the chosen agent", function()
+  local composer = require("herdr-context.composer")
+  config.setup({ presence = { enabled = false }, remember_target = "session" })
+  local source = buffer({ "return 1" }, vim.fn.getcwd() .. "/lua/target-test.lua")
+  local request = composer.capture_request({ bufnr = source, winid = vim.api.nvim_get_current_win(), line = 1 })
+  local session = composer._create_session(request)
+  session:set_target({ pane_id = "w0:p4", agent = "grok", display_agent = "grok" })
+  eq("w0:p4", session.target.pane_id)
+  eq("w0:p4", targets.selected().pane_id)
+  local stage_calls = 0
+  local original_stage = transport.stage
+  transport.stage = function(_, target, payload, callback)
+    stage_calls = stage_calls + 1
+    eq("w0:p4", target.pane_id)
+    contains(payload, "ping")
+    callback(true, nil, { mode = "literal" })
+  end
+  session.entries = {
+    {
+      id = "selection",
+      name = "Current line",
+      status = "available",
+      section = {
+        id = "selection",
+        title = "Current line",
+        reference = "@lua/target-test.lua#L1",
+        format = "code",
+        content = "return 1",
+        fingerprint = "selection:target",
+      },
+    },
+  }
+  session.selected.selection = true
+  session:set_instruction("ping")
+  session:stage()
+  transport.stage = original_stage
+  eq(1, stage_calls)
+  session:close()
+  delete_buffer(source)
 end)
 
 test("registers all user commands", function()
@@ -3051,6 +3274,174 @@ test("registers all user commands", function()
   }) do
     eq(2, vim.fn.exists(":" .. name), name)
   end
+end)
+
+test("drops leftover format and instruction modules and unused submit", function()
+  eq(0, vim.fn.filereadable("lua/herdr-context/format.lua"))
+  eq(0, vim.fn.filereadable("lua/herdr-context/ui/instruction.lua"))
+  package.loaded["herdr-context.format"] = nil
+  package.loaded["herdr-context.ui.instruction"] = nil
+  eq(false, pcall(require, "herdr-context.format"))
+  eq(false, pcall(require, "herdr-context.ui.instruction"))
+  eq(nil, herdr.submit)
+  local src = table.concat(vim.fn.readfile("lua/herdr-context/herdr.lua"), "\n")
+  truthy(not src:find("send%-keys"))
+end)
+
+test("composer Agent pane 1-9 selects that live agent", function()
+  local composer = require("herdr-context.composer")
+  local composer_ui = require("herdr-context.ui.composer")
+  config.setup({ presence = { enabled = false }, remember_target = "session" })
+  local source = buffer({ "return 1" }, vim.fn.getcwd() .. "/lua/digit-test.lua")
+  vim.api.nvim_set_current_buf(source)
+  local request = composer.capture_request({ bufnr = source, winid = vim.api.nvim_get_current_win(), line = 1 })
+  local session = composer._create_session(request)
+  session.candidates = {
+    { pane_id = "w0:p1", agent = "codex", agent_status = "idle", name = "one" },
+    { pane_id = "w0:p2", agent = "claude", agent_status = "idle", name = "two" },
+    { pane_id = "w0:p3", agent = "grok", agent_status = "idle", name = "three" },
+  }
+  session.target = session.candidates[1]
+  function session:refresh_candidates() end
+  composer_ui.open(session)
+  local ui = composer_ui._active()
+  local function agent_lines()
+    return vim.api.nvim_buf_get_lines(ui.agent_bufnr, 0, -1, false)
+  end
+  local function first_char(line)
+    return vim.fn.strcharpart(line, 0, 1)
+  end
+  local rendered = agent_lines()
+  eq("▶", first_char(rendered[1]), "selected agent row must start with ▶, not a UTF-8 fragment")
+  contains(rendered[1], " 1 ")
+  eq(" ", first_char(rendered[2]))
+  contains(rendered[2], " 2 ")
+  truthy(not rendered[1]:find("\226 1", 1, true), "must not byte-slice the ▶ marker")
+  local function feed(keys)
+    vim.cmd("stopinsert")
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "xt", false)
+  end
+  vim.api.nvim_set_current_win(ui.agent_winid)
+  feed("2")
+  eq("w0:p2", session.target.pane_id)
+  truthy(
+    vim.wait(100, function()
+      return first_char(agent_lines()[2] or "") == "▶"
+    end),
+    "selecting 2 must re-render ▶ on that row"
+  )
+  eq("▶", first_char(agent_lines()[2]))
+  contains(agent_lines()[2], " 2 ")
+  eq(" ", first_char(agent_lines()[1]))
+  feed("3")
+  eq("w0:p3", session.target.pane_id)
+  truthy(
+    vim.wait(100, function()
+      return first_char(agent_lines()[3] or "") == "▶"
+    end),
+    "selecting 3 must re-render ▶ on that row"
+  )
+  eq("▶", first_char(agent_lines()[3]))
+  contains(agent_lines()[3], " 3 ")
+
+  local function has_digit_map(bufnr)
+    for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
+      if mapping.lhs == "1" or mapping.lhs == "2" or mapping.lhs == "3" then
+        return true
+      end
+    end
+    return false
+  end
+  eq(false, has_digit_map(ui.message_bufnr), "message pane must not remap digits")
+  eq(false, has_digit_map(ui.list_bufnr), "references pane must not remap digits")
+  vim.api.nvim_set_current_win(ui.message_winid)
+  feed("1")
+  eq("w0:p3", session.target.pane_id, "digits in the message pane do not change the target")
+  feed("<Esc>")
+  session:close()
+  delete_buffer(source)
+end)
+
+test("attaches whole-file @path references without embedding file bodies", function()
+  local composer = require("herdr-context.composer")
+  local composer_ui = require("herdr-context.ui.composer")
+  local files = require("herdr-context.providers.files")
+  local util = require("herdr-context.providers.util")
+  config.setup({ presence = { enabled = false } })
+  eq("@lua/foo.lua", util.reference({ relative_path = "lua/foo.lua" }))
+  eq("@lua/foo.lua#L3", util.reference({ relative_path = "lua/foo.lua" }, 3, 3))
+  eq("@lua/foo.lua#L1-L4", util.reference({ relative_path = "lua/foo.lua" }, 1, 4))
+  local cwd = vim.fn.getcwd()
+  local current = buffer({ "CURRENT_BODY_UNIQUE" }, cwd .. "/lua/herdr-context/bundle.lua")
+  local alternate = buffer({ "ALTERNATE_BODY_UNIQUE" }, cwd .. "/lua/alternate.lua")
+  local listed = buffer({ "LISTED_BODY_UNIQUE" }, cwd .. "/lua/listed.lua")
+  vim.bo[current].buflisted = true
+  vim.bo[alternate].buflisted = true
+  vim.bo[listed].buflisted = true
+  vim.api.nvim_set_current_buf(alternate)
+  vim.api.nvim_set_current_buf(current)
+  local request = composer.capture_request({ bufnr = current, winid = vim.api.nvim_get_current_win(), line = 1 })
+  local file_section, alt_section, listed_sections
+  files.providers[1].collect(request, function(section, err)
+    file_section = section
+    truthy(section, err)
+  end)
+  files.providers[2].collect(request, function(section, err)
+    alt_section = section
+    truthy(section, err)
+  end)
+  files.providers[3].collect(request, function(section, err)
+    if type(section) == "table" and section.id == nil and section[1] then
+      listed_sections = section
+    elseif section then
+      listed_sections = { section }
+    end
+    truthy(listed_sections and #listed_sections > 0, err)
+  end)
+  eq("@lua/herdr-context/bundle.lua", file_section.reference)
+  eq("@lua/alternate.lua", alt_section.reference)
+  local listed_section
+  for _, section in ipairs(listed_sections) do
+    if section.reference == "@lua/listed.lua" then
+      listed_section = section
+    end
+  end
+  truthy(listed_section, "listed buffer reference was not collected")
+
+  local session = composer._create_session(request)
+  session.entries = {
+    { id = file_section.id, name = file_section.title, status = "available", section = file_section },
+    { id = alt_section.id, name = alt_section.title, status = "available", section = alt_section },
+    { id = listed_section.id, name = listed_section.title, status = "available", section = listed_section },
+  }
+  session.selected.file = true
+  session.selected.alternate = true
+  session.selected[listed_section.id] = true
+  composer._rebuild(session)
+  local payload = session.bundle.payload
+  contains(payload, "@lua/herdr-context/bundle.lua")
+  contains(payload, "@lua/alternate.lua")
+  contains(payload, "@lua/listed.lua")
+  truthy(not payload:find("@lua/herdr-context/bundle.lua#L", 1, true))
+  truthy(not payload:find("@lua/alternate.lua#L", 1, true))
+  truthy(not payload:find("@lua/listed.lua#L", 1, true))
+  truthy(not payload:find("CURRENT_BODY_UNIQUE", 1, true))
+  truthy(not payload:find("ALTERNATE_BODY_UNIQUE", 1, true))
+  truthy(not payload:find("LISTED_BODY_UNIQUE", 1, true))
+
+  composer_ui.open(session)
+  local ui = composer_ui._active()
+  local preview = table.concat(vim.api.nvim_buf_get_lines(ui.preview_bufnr, 0, -1, false), "\n")
+  contains(preview, "@lua/herdr-context/bundle.lua")
+  contains(preview, "@lua/alternate.lua")
+  contains(preview, "@lua/listed.lua")
+  truthy(not preview:find("CURRENT_BODY_UNIQUE", 1, true))
+  truthy(not preview:find("ALTERNATE_BODY_UNIQUE", 1, true))
+  truthy(not preview:find("LISTED_BODY_UNIQUE", 1, true))
+  session:close()
+  delete_buffer(current)
+  delete_buffer(alternate)
+  delete_buffer(listed)
 end)
 
 test("parses the delegate command kind and preset", function()

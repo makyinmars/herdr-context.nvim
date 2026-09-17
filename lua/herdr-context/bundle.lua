@@ -6,6 +6,7 @@ local formats = {
   diagnostics = true,
   list = true,
   text = true,
+  reference = true,
 }
 
 local severity_names = {
@@ -114,6 +115,122 @@ local function list_lines(section)
   return lines
 end
 
+function M.file_reference_string(path, start_line, end_line)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+  if start_line == nil or end_line == nil then
+    return "@" .. path
+  end
+  if start_line == end_line then
+    return ("@%s#L%d"):format(path, start_line)
+  end
+  return ("@%s#L%d-L%d"):format(path, start_line, end_line)
+end
+
+local function unnamed_label(captured)
+  return ("Unnamed buffer lines L%d-L%d"):format(captured.start_line, captured.end_line)
+end
+
+function M.section_from_capture(kind, captured, opts)
+  opts = opts or {}
+  local named = not captured.unnamed and type(captured.relative_path) == "string" and captured.relative_path ~= ""
+  local reference = named and M.file_reference_string(captured.relative_path, captured.start_line, captured.end_line)
+    or unnamed_label(captured)
+
+  if kind == "reference" then
+    if not named then
+      return nil, "Reference-only mode requires a named buffer with a stable path"
+    end
+    return {
+      id = "selection",
+      title = "Reference",
+      priority = 10,
+      format = "reference",
+      reference = reference,
+      content = "",
+      language = captured.filetype,
+      fingerprint = "reference:" .. reference,
+    }
+  end
+
+  if kind == "content" then
+    return {
+      id = "selection",
+      title = "Selection",
+      priority = 10,
+      format = "code",
+      reference = reference,
+      content = captured.text or "",
+      language = captured.filetype,
+      modified = captured.modified,
+      embed = true,
+      fingerprint = "content:" .. reference,
+    }
+  end
+
+  if kind == "diagnostics" then
+    return {
+      id = "diagnostics",
+      title = "Diagnostics",
+      priority = 30,
+      format = "diagnostics",
+      reference = named and reference or nil,
+      content = "",
+      items = opts.diagnostics or opts.items or {},
+      modified = captured.modified,
+      fingerprint = "diagnostics:" .. (named and reference or "unnamed"),
+    }
+  end
+
+  return nil, "Unknown context operation: " .. tostring(kind)
+end
+
+function M.build_capture(kind, captured, opts)
+  opts = opts or {}
+  local section, err = M.section_from_capture(kind, captured, opts)
+  if not section then
+    return nil, err
+  end
+  local include = kind == "content" and "content" or "reference"
+  local built, build_err = M.build({ section }, opts.max_bytes or 64 * 1024, { include = include })
+  if not built then
+    return nil, build_err
+  end
+  if built.oversized then
+    return nil, built.error, built
+  end
+  return built
+end
+
+local function file_reference(section)
+  local reference = section.reference
+  if type(reference) ~= "string" or reference == "" then
+    return nil
+  end
+  if section.modified then
+    return reference .. " (unsaved changes)"
+  end
+  return reference
+end
+
+local function has_file_reference(section)
+  return type(section.reference) == "string" and section.reference:match("^@") ~= nil
+end
+
+local function should_embed(section, include)
+  if section.embed then
+    return true
+  end
+  if include == "content" then
+    return true
+  end
+  if section.format == "reference" then
+    return false
+  end
+  return not has_file_reference(section)
+end
+
 function M.normalize(section, provider)
   if type(section) ~= "table" then
     return nil, "Provider returned a non-table section"
@@ -147,30 +264,47 @@ function M.normalize(section, provider)
   return normalized
 end
 
-function M.render_section(section)
-  local lines = { "## " .. section.title, "" }
-  if section.reference and section.reference ~= "" then
-    local reference = section.reference
-    if section.modified then
-      reference = reference .. " (unsaved changes)"
-    end
-    lines[#lines + 1] = reference
-    lines[#lines + 1] = ""
+function M.render_section(section, opts)
+  opts = opts or {}
+  local include = opts.include or "reference"
+
+  if section.id == "instructions" then
+    return section.content
   end
 
-  if section.format == "code" or section.format == "diff" then
+  if section.format == "diagnostics" then
+    return table.concat(diagnostic_lines(section), "\n")
+  end
+
+  if section.format == "list" then
+    local lines = { section.title, "" }
+    vim.list_extend(lines, list_lines(section))
+    return table.concat(lines, "\n")
+  end
+
+  if section.format == "text" then
+    return section.content
+  end
+
+  local lines = {}
+  local reference = file_reference(section)
+  if reference then
+    lines[#lines + 1] = reference
+  end
+
+  if should_embed(section, include) then
+    if #lines > 0 then
+      lines[#lines + 1] = ""
+    end
     local fence = fence_for(section.content)
     local language = section.format == "diff" and "diff" or language_for(section.language)
     lines[#lines + 1] = fence .. language
     lines[#lines + 1] = section.content
     lines[#lines + 1] = fence
-  elseif section.format == "diagnostics" then
-    vim.list_extend(lines, diagnostic_lines(section))
-  elseif section.format == "list" then
-    vim.list_extend(lines, list_lines(section))
-  else
+  elseif #lines == 0 then
     lines[#lines + 1] = section.content
   end
+
   return table.concat(lines, "\n")
 end
 
@@ -187,8 +321,14 @@ local function ordered(sections)
   return sections
 end
 
-function M.build(sections, max_bytes)
+function M.build(sections, max_bytes, opts)
   vim.validate({ sections = { sections, "table" }, max_bytes = { max_bytes, "number" } })
+  opts = opts or {}
+  local include = opts.include or "reference"
+  if include ~= "reference" and include ~= "content" then
+    include = "reference"
+  end
+
   local normalized = {}
   local fingerprints = {}
   local list_items = {}
@@ -218,14 +358,13 @@ function M.build(sections, max_bytes)
   ordered(normalized)
   local rendered = {}
   for _, section in ipairs(normalized) do
-    section.rendered = M.render_section(section)
+    section.rendered = M.render_section(section, { include = include })
     section.bytes = #section.rendered
-    rendered[#rendered + 1] = section.rendered
+    if section.rendered ~= "" then
+      rendered[#rendered + 1] = section.rendered
+    end
   end
-  local payload = "Context bundle"
-  if #rendered > 0 then
-    payload = payload .. "\n\n" .. table.concat(rendered, "\n\n")
-  end
+  local payload = table.concat(rendered, "\n\n")
   local bytes = #payload
   local oversized = bytes > max_bytes
   return {
@@ -233,11 +372,13 @@ function M.build(sections, max_bytes)
     payload = payload,
     bytes = bytes,
     max_bytes = max_bytes,
+    include = include,
     oversized = oversized,
     error = oversized and ("Payload is %d bytes; the configured maximum is %d bytes"):format(bytes, max_bytes) or nil,
   }
 end
 
 M.item_fingerprint = item_fingerprint
+M.has_file_reference = has_file_reference
 
 return M

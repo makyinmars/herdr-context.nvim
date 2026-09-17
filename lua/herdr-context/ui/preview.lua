@@ -1,22 +1,14 @@
 local M = {}
 
 local config = require("herdr-context.config")
+local float = require("herdr-context.ui.float")
 local herdr = require("herdr-context.herdr")
 
 local active
 local generation = 0
 
-local function valid(preview)
-  return preview and vim.api.nvim_buf_is_valid(preview.bufnr) and vim.api.nvim_win_is_valid(preview.winid)
-end
-
 local function render(preview, lines)
-  if not valid(preview) then
-    return
-  end
-  vim.bo[preview.bufnr].modifiable = true
-  vim.api.nvim_buf_set_lines(preview.bufnr, 0, -1, false, lines)
-  vim.bo[preview.bufnr].modifiable = false
+  float.set_lines(preview.bufnr, lines, { modifiable = false })
 end
 
 local function error_message(err)
@@ -80,46 +72,36 @@ function M.open(agent, opts)
   M.close()
   generation = generation + 1
   local request_generation = generation
-  local bufnr = vim.api.nvim_create_buf(false, true)
   local label = agent.display_agent or agent.agent or "agent"
-  local winid
+  local bufnr, winid
   if opts.side and opts.source_winid and vim.api.nvim_win_is_valid(opts.source_winid) then
+    bufnr = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_set_current_win(opts.source_winid)
     vim.cmd(opts.position == "left" and "rightbelow vsplit" or "leftabove vsplit")
     winid = vim.api.nvim_get_current_win()
     vim.api.nvim_win_set_buf(winid, bufnr)
     vim.api.nvim_win_set_width(winid, config.get().agents_view.preview_width)
     vim.wo[winid].winbar = ("%%#Title# %s · recent output "):format(label)
+    float.configure_buffer(bufnr, { filetype = "herdr-context-output", modifiable = false })
+    float.configure_window(winid, { wrap = false, winhighlight = false })
   else
     local max_width = math.max(1, vim.o.columns - 4)
     local max_height = math.max(1, vim.o.lines - vim.o.cmdheight - 4)
     local width = math.min(math.max(40, math.floor(vim.o.columns * 0.75)), max_width)
     local height = math.min(math.max(8, math.floor((vim.o.lines - vim.o.cmdheight) * 0.7)), max_height)
-    winid = vim.api.nvim_open_win(bufnr, true, {
-      relative = "editor",
-      style = "minimal",
-      border = "rounded",
+    bufnr, winid = float.open({
+      enter = true,
       width = width,
       height = height,
       row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
       col = math.max(0, math.floor((vim.o.columns - width) / 2)),
       title = (" %s · recent output "):format(label),
-      title_pos = "center",
+      filetype = "herdr-context-output",
+      modifiable = false,
     })
   end
   local preview = { bufnr = bufnr, winid = winid, pane_id = agent.pane_id, agent = agent, opts = opts }
   active = preview
-
-  vim.bo[bufnr].buftype = "nofile"
-  vim.bo[bufnr].bufhidden = "wipe"
-  vim.bo[bufnr].swapfile = false
-  vim.bo[bufnr].filetype = "herdr-context-output"
-  vim.bo[bufnr].modifiable = false
-  vim.wo[winid].number = false
-  vim.wo[winid].relativenumber = false
-  vim.wo[winid].signcolumn = "no"
-  vim.wo[winid].foldcolumn = "0"
-  vim.wo[winid].wrap = false
 
   local function close()
     M.close()

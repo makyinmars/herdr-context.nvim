@@ -4,6 +4,29 @@ All notable changes to `herdr-context.nvim` are documented here.
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-16
+
+- Require Herdr 0.9.1. Follow the 0.9 agent, pane, and plugin contracts: submit with
+  `herdr agent prompt`, stage with `herdr pane send-text`, and keep the companion picker as a popup.
+- Default composer payloads to a message plus `@path#L…` references instead of fenced file dumps.
+- Rebuild the composer as one stacked float: live agent list, message editor, reference checklist, and
+  exact send preview. Remove the covering message overlay and the two-pane payload dump.
+- Let `t` / `<CR>` pick a specific live agent in the composer. Do not leave the target as "no target"
+  when agents are visible.
+- Move between composer panes with `<C-h>` / `<C-j>` / `<C-k>` / `<C-l>` (wrap when a direction has no neighbor).
+- Hide empty diagnostics and collapse empty list providers. Press `e` to embed a snippet; warn before
+  sending a disk reference for an unsaved buffer.
+- Treat Grok and OpenCode as bracketed-paste agents for multiline staging.
+- Route `:HerdrContextReference`, `:HerdrContextSend`, and `:HerdrContextDiagnostics`
+  through the same bundle renderer as the composer, and drop the duplicated
+  `format.lua` fence, language, and diagnostic helpers.
+- Always subscribe to `workspace.reordered`. Remove unused `herdr.submit()`
+  (`pane send-keys enter`). Open the prompt in the composer message pane, and open
+  history, explain, and centered preview through the shared float helper.
+- Pick a live composer agent with number keys `1`–`9` in the Agent pane.
+- Attach whole-file `@path` references (current file, alternate file `#`, listed
+  buffers) without embedding file contents.
+
 ## 0.5.0 - 2026-08-26
 
 - Expand secret warnings with GitHub, Slack, GCP service-account, JWT, and same-line entropy detection.

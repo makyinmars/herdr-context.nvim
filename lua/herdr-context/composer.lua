@@ -6,8 +6,21 @@ local context = require("herdr-context.context")
 local picker = require("herdr-context.picker")
 local providers = require("herdr-context.providers")
 local safety = require("herdr-context.safety")
+local state = require("herdr-context.state")
 local targets = require("herdr-context.targets")
 local transport = require("herdr-context.transport")
+
+local PRIMARY_IDS = {
+  selection = true,
+  symbol = true,
+  hunk = true,
+}
+
+local LIST_IDS = {
+  quickfix = true,
+  location_list = true,
+  trouble = true,
+}
 
 local function notify(message, level)
   vim.notify(message, level or vim.log.levels.INFO, { title = "herdr-context.nvim" })
@@ -76,6 +89,24 @@ local function available(session, id)
   return entry and entry.status == "available" and entry.section ~= nil
 end
 
+local function has_items(entry)
+  return entry and entry.section and entry.section.items and #entry.section.items > 0
+end
+
+local function attachable(session, id)
+  local entry = entry_by_id(session, id)
+  if not entry or entry.status ~= "available" or not entry.section then
+    return false
+  end
+  if id == "diagnostics" or entry.section.format == "diagnostics" then
+    return config.get().composer.attach_empty_diagnostics or has_items(entry)
+  end
+  if LIST_IDS[id] or entry.section.format == "list" then
+    return has_items(entry)
+  end
+  return true
+end
+
 local function update(session)
   if session.on_update and not session.closed then
     session.on_update(session)
@@ -119,7 +150,7 @@ local function apply_defaults(session)
   if preset then
     local selected = {}
     for _, id in ipairs(preset) do
-      selected[id] = available(session, id)
+      selected[id] = attachable(session, id)
     end
     session.selected = selected
     return
@@ -127,40 +158,77 @@ local function apply_defaults(session)
   local defaults = config.get().composer.defaults
   local selected = {}
   if session.request.selection then
-    selected.selection = defaults.selection and available(session, "selection")
-    selected.diagnostics = defaults.diagnostics and available(session, "diagnostics")
+    selected.selection = defaults.selection and attachable(session, "selection")
+    selected.diagnostics = defaults.diagnostics and attachable(session, "diagnostics")
   else
-    selected.symbol = defaults.symbol and available(session, "symbol")
-    selected.hunk = defaults.hunk and available(session, "hunk")
+    selected.symbol = defaults.symbol and attachable(session, "symbol")
+    selected.hunk = defaults.hunk and attachable(session, "hunk")
     if not selected.symbol and not selected.hunk then
-      selected.selection = defaults.selection and available(session, "selection")
+      selected.selection = defaults.selection and attachable(session, "selection")
     end
-    selected.diagnostics = defaults.diagnostics and available(session, "diagnostics")
+    selected.diagnostics = defaults.diagnostics and attachable(session, "diagnostics")
   end
   for _, id in ipairs({ "quickfix", "location_list", "trouble" }) do
-    selected[id] = defaults[id] and available(session, id)
+    selected[id] = defaults[id] and attachable(session, id)
   end
   session.selected = selected
 end
 
+local function should_embed(session, entry)
+  local section = entry.safe_section or entry.section
+  if not section then
+    return false
+  end
+  if session.include == "content" then
+    return section.format == "code" or section.format == "diff" or section.format == "reference"
+  end
+  if session.embed[entry.id] then
+    return true
+  end
+  if section.format ~= "code" and section.format ~= "diff" and section.format ~= "reference" then
+    return false
+  end
+  if not bundle.has_file_reference(section) then
+    return true
+  end
+  return section.modified and config.get().composer.embed_unsaved == "always"
+end
+
+local function prepared_section(session, entry)
+  local section = vim.deepcopy(entry.safe_section)
+  if should_embed(session, entry) then
+    section.embed = true
+  end
+  return section
+end
+
 local function rebuild(session)
   local cfg = config.get()
+  session.include = session.include or cfg.composer.include
   local sections = {}
   for _, entry in ipairs(session.entries) do
     entry.safe_section, entry.excluded = nil, nil
+    entry.embed = false
     if entry.section then
       entry.safe_section, entry.excluded = safety.sanitize(entry.section, session.request, cfg.safety)
-      local single = entry.safe_section and bundle.build({ entry.safe_section }, cfg.max_payload_bytes)
-      if single then
-        entry.bytes = single.sections[1] and single.sections[1].bytes or 0
-        entry.oversized = single.oversized
+      if entry.safe_section then
+        local prepared = prepared_section(session, entry)
+        entry.embed = prepared.embed == true
+        local single = bundle.build({ prepared }, cfg.max_payload_bytes, { include = session.include })
+        if single then
+          entry.bytes = single.sections[1] and single.sections[1].bytes or 0
+          entry.oversized = single.oversized
+        else
+          entry.bytes = 0
+          entry.oversized = false
+        end
       else
         entry.bytes = 0
         entry.oversized = false
       end
     end
     if session.selected[entry.id] and entry.status == "available" and entry.safe_section then
-      sections[#sections + 1] = entry.safe_section
+      sections[#sections + 1] = prepared_section(session, entry)
     end
   end
   if session.instruction and session.instruction ~= "" then
@@ -173,7 +241,7 @@ local function rebuild(session)
       fingerprint = "instructions:" .. session.instruction,
     }
   end
-  local built, err = bundle.build(sections, cfg.max_payload_bytes)
+  local built, err = bundle.build(sections, cfg.max_payload_bytes, { include = session.include })
   session.bundle = built
   session.bundle_error = err
   session.safety_warnings = built and safety.scan(built.sections, cfg.safety) or {}
@@ -184,6 +252,25 @@ local function rebuild(session)
     session.warning_signature = warning_signature
     session.safety_confirmed = false
   end
+end
+
+local function unsaved_unembedded(session)
+  if session.include == "content" or config.get().composer.embed_unsaved ~= "ask" then
+    return false
+  end
+  for _, entry in ipairs(session.entries) do
+    local section = entry.safe_section
+    if
+      session.selected[entry.id]
+      and section
+      and section.modified
+      and not entry.embed
+      and bundle.has_file_reference(section)
+    then
+      return true
+    end
+  end
+  return false
 end
 
 local function collect(session)
@@ -233,15 +320,74 @@ local function fresh_request(session)
   })
 end
 
+local function send_bundle(session, target, stage_opts)
+  session.target = target
+  if session.track then
+    notify(("Submitting context to %s (%s) and tracking its state…"):format(target.agent or "agent", target.pane_id))
+  end
+  transport.stage(config.get(), target, session.bundle.payload, function(ok, err, result)
+    if not ok then
+      notify(err, vim.log.levels.ERROR)
+      return
+    end
+    local suffix = result.mode == "context_file" and " via a temporary context file" or ""
+    require("herdr-context.history").record({
+      kind = "composer",
+      target = target,
+      payload = session.bundle.payload,
+      bytes = session.bundle.bytes,
+      providers = selected_ids(session),
+      instruction = session.instruction,
+      preset = session.preset,
+      mode = result.mode,
+      submitted = result.submitted,
+      tracked = result.tracked,
+      status = result.status,
+    })
+    local preview_result = result.tracked and (result.status == "blocked" or session.preview_result)
+    if result.tracking_error then
+      notify(result.tracking_message, vim.log.levels.WARN)
+    elseif result.tracked and result.status == "blocked" then
+      notify(
+        ("Herdr %s (%s) is blocked and needs input"):format(target.agent or "agent", target.pane_id),
+        vim.log.levels.WARN
+      )
+    elseif result.tracked then
+      notify(
+        ("Herdr %s (%s) reached %s"):format(target.agent or "agent", target.pane_id, result.status or "a settled state")
+      )
+    else
+      local action = result.submitted and "Sent" or "Staged"
+      notify(("%s context for %s (%s)%s"):format(action, target.agent or "agent", target.pane_id, suffix))
+    end
+    session:close()
+    if preview_result then
+      vim.schedule(function()
+        require("herdr-context.ui.preview").open(result.agent or target)
+      end)
+    end
+  end, {
+    submit = stage_opts.submit,
+    wait = session.track,
+    timeout_ms = session.tracking_timeout_ms,
+  })
+end
+
 local function create_session(request, opts)
   opts = opts or {}
+  local cfg = config.get()
   local session = {
     request = request,
     entries = {},
     selected = {},
+    embed = {},
+    include = cfg.composer.include,
+    lists_expanded = false,
+    unsaved_confirmed = false,
+    candidates = {},
     target = targets.selected(),
     target_label = opts.target_label,
-    preview = config.get().composer.preview,
+    preview = cfg.composer.preview,
     collecting = false,
     stale = false,
     closed = false,
@@ -267,13 +413,56 @@ local function create_session(request, opts)
     return self.stale
   end
 
+  function session:visible_entry(entry)
+    local options = config.get().composer
+    if self.selected[entry.id] or PRIMARY_IDS[entry.id] then
+      return true
+    end
+    if not options.hide_empty then
+      return true
+    end
+    if entry.id == "diagnostics" then
+      return has_items(entry) or options.attach_empty_diagnostics
+    end
+    if LIST_IDS[entry.id] then
+      return self.lists_expanded or has_items(entry)
+    end
+    return entry.status == "available"
+  end
+
+  function session:hidden_list_count()
+    local count = 0
+    for _, entry in ipairs(self.entries) do
+      if LIST_IDS[entry.id] and not self:visible_entry(entry) then
+        count = count + 1
+      end
+    end
+    return count
+  end
+
   function session:toggle(id)
     if not available(self, id) then
       return
     end
     self.selected[id] = not self.selected[id]
+    self.unsaved_confirmed = false
     rescope_diagnostics(self)
     rebuild(self)
+    update(self)
+  end
+
+  function session:toggle_embed(id)
+    if not available(self, id) then
+      return
+    end
+    self.embed[id] = not self.embed[id]
+    self.unsaved_confirmed = false
+    rebuild(self)
+    update(self)
+  end
+
+  function session:toggle_lists()
+    self.lists_expanded = not self.lists_expanded
     update(self)
   end
 
@@ -297,9 +486,10 @@ local function create_session(request, opts)
     self.preset = name
     local selected = {}
     for _, id in ipairs(preset) do
-      selected[id] = available(self, id)
+      selected[id] = attachable(self, id)
     end
     self.selected = selected
+    self.unsaved_confirmed = false
     rescope_diagnostics(self)
     rebuild(self)
     update(self)
@@ -314,7 +504,53 @@ local function create_session(request, opts)
     end
     self.request = request_or_err
     self.stale = false
+    self.unsaved_confirmed = false
     collect(self)
+  end
+
+  function session:refresh_candidates()
+    if self.stage_handler then
+      self.candidates = {}
+      return
+    end
+    local options = config.get()
+    local snapshot = state.get()
+    self.candidates = targets.candidates(snapshot, {
+      scope = options.target_scope,
+      cwd = self.request.cwd,
+      git_root = self.request.git_root,
+    })
+    if self.target then
+      local live = targets.find(self.candidates, self.target.pane_id)
+      if live then
+        self.target = live
+      elseif #self.candidates > 0 then
+        self.target = nil
+      end
+    end
+    if not self.target then
+      local remembered = targets.selected()
+      local live = remembered and targets.find(self.candidates, remembered.pane_id)
+      if live then
+        self.target = live
+      elseif #self.candidates == 1 then
+        targets.remember(options, self.candidates[1])
+        self.target = self.candidates[1]
+      end
+    end
+  end
+
+  function session:set_target(agent)
+    if not agent or not agent.pane_id then
+      return
+    end
+    local ok, err = targets.remember(config.get(), agent)
+    if not ok then
+      notify(err, vim.log.levels.ERROR)
+      return
+    end
+    self.target = agent
+    update(self)
   end
 
   function session:change_target()
@@ -322,7 +558,16 @@ local function create_session(request, opts)
       notify("Delegation creates a new target; no existing target is needed")
       return
     end
-    targets.resolve(config.get(), picker, { force = true }, function(target, err)
+    local options = config.get()
+    if options.composer.agent_picker == "inline" then
+      self:refresh_candidates()
+      update(self)
+      if self.focus_agents then
+        self.focus_agents()
+      end
+      return
+    end
+    targets.resolve(options, picker, { force = true }, function(target, err)
       if not target then
         if err ~= "Target selection cancelled" then
           notify(err, vim.log.levels.ERROR)
@@ -351,14 +596,21 @@ local function create_session(request, opts)
       return
     end
     if not self.bundle or #self.bundle.sections == 0 then
-      notify("Select at least one available context provider", vim.log.levels.WARN)
+      notify("Write a message or attach a reference", vim.log.levels.WARN)
       return
     end
     if self.bundle.oversized then
       notify(self.bundle.error, vim.log.levels.ERROR)
       return
     end
-    if #self.safety_warnings > 0 and config.get().safety.confirm_warnings and not self.safety_confirmed then
+    if unsaved_unembedded(self) and not self.unsaved_confirmed then
+      self.unsaved_confirmed = true
+      update(self)
+      notify("Unsaved buffer; press e to embed the snippet, or s again to send the disk reference", vim.log.levels.WARN)
+      return
+    end
+    local options = config.get()
+    if #self.safety_warnings > 0 and options.safety.confirm_warnings and not self.safety_confirmed then
       self.safety_confirmed = true
       update(self)
       notify(
@@ -373,69 +625,37 @@ local function create_session(request, opts)
       return
     end
 
-    targets.resolve(config.get(), picker, {}, function(target, target_err)
+    if options.composer.agent_picker == "inline" then
+      self:refresh_candidates()
+      if self.target then
+        send_bundle(self, self.target, stage_opts)
+        return
+      end
+      if #self.candidates == 1 then
+        self:set_target(self.candidates[1])
+        send_bundle(self, self.candidates[1], stage_opts)
+        return
+      end
+      if #self.candidates == 0 then
+        notify(("No live Herdr agents found in target scope %q"):format(options.target_scope), vim.log.levels.ERROR)
+        return
+      end
+      notify("Select an agent in the composer", vim.log.levels.WARN)
+      update(self)
+      if self.focus_agents then
+        self.focus_agents()
+      end
+      return
+    end
+
+    targets.resolve(options, picker, {}, function(target, target_err)
       if not target then
         if target_err ~= "Target selection cancelled" then
           notify(target_err, vim.log.levels.ERROR)
         end
         return
       end
-      self.target = target
-      if self.track then
-        notify(
-          ("Submitting context to %s (%s) and tracking its state…"):format(target.agent or "agent", target.pane_id)
-        )
-      end
-      transport.stage(config.get(), target, self.bundle.payload, function(ok, err, result)
-        if not ok then
-          notify(err, vim.log.levels.ERROR)
-          return
-        end
-        local suffix = result.mode == "context_file" and " via a temporary context file" or ""
-        require("herdr-context.history").record({
-          kind = "composer",
-          target = target,
-          payload = self.bundle.payload,
-          bytes = self.bundle.bytes,
-          providers = selected_ids(self),
-          instruction = self.instruction,
-          preset = self.preset,
-          mode = result.mode,
-          submitted = result.submitted,
-          tracked = result.tracked,
-          status = result.status,
-        })
-        local preview_result = result.tracked and (result.status == "blocked" or self.preview_result)
-        if result.tracking_error then
-          notify(result.tracking_message, vim.log.levels.WARN)
-        elseif result.tracked and result.status == "blocked" then
-          notify(
-            ("Herdr %s (%s) is blocked and needs input"):format(target.agent or "agent", target.pane_id),
-            vim.log.levels.WARN
-          )
-        elseif result.tracked then
-          notify(
-            ("Herdr %s (%s) reached %s"):format(
-              target.agent or "agent",
-              target.pane_id,
-              result.status or "a settled state"
-            )
-          )
-        else
-          local action = result.submitted and "Sent" or "Staged"
-          notify(("%s context for %s (%s)%s"):format(action, target.agent or "agent", target.pane_id, suffix))
-        end
-        self:close()
-        if preview_result then
-          vim.schedule(function()
-            require("herdr-context.ui.preview").open(result.agent or target)
-          end)
-        end
-      end, {
-        submit = stage_opts.submit,
-        wait = self.track,
-        timeout_ms = self.tracking_timeout_ms,
-      })
+      send_bundle(self, target, stage_opts)
     end)
   end
 
@@ -457,6 +677,7 @@ local function create_session(request, opts)
     return selected_ids(self)
   end
 
+  session:refresh_candidates()
   return session
 end
 
@@ -477,7 +698,7 @@ function M.open(opts)
   if opts.edit_instruction then
     vim.schedule(function()
       if not session.closed then
-        require("herdr-context.ui.instruction").open(session)
+        require("herdr-context.ui.composer").edit_message(session)
       end
     end)
   end
@@ -512,7 +733,7 @@ function M.stage_provider(id, opts)
       notify(excluded, vim.log.levels.ERROR)
       return
     end
-    local built, build_err = bundle.build({ safe_section }, cfg.max_payload_bytes)
+    local built, build_err = bundle.build({ safe_section }, cfg.max_payload_bytes, { include = cfg.composer.include })
     if not built then
       notify(build_err, vim.log.levels.ERROR)
       return
@@ -560,5 +781,6 @@ M._collect = collect
 M._rebuild = rebuild
 M._apply_defaults = apply_defaults
 M._rescope_diagnostics = rescope_diagnostics
+M._attachable = attachable
 
 return M

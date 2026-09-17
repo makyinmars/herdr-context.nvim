@@ -1,6 +1,7 @@
 local M = {}
 
 local config = require("herdr-context.config")
+local float = require("herdr-context.ui.float")
 local history = require("herdr-context.history")
 local picker = require("herdr-context.picker")
 local targets = require("herdr-context.targets")
@@ -9,7 +10,7 @@ local transport = require("herdr-context.transport")
 local active
 
 local function valid(ui)
-  return ui and vim.api.nvim_buf_is_valid(ui.bufnr) and vim.api.nvim_win_is_valid(ui.winid)
+  return ui and float.valid_buffer(ui.bufnr) and float.valid_window(ui.winid)
 end
 
 local function selected(ui)
@@ -51,9 +52,7 @@ local function render(ui, detail)
     lines[#lines + 1] = string.rep("─", 58)
     vim.list_extend(lines, vim.split(detail.payload or "", "\n", { plain = true }))
   end
-  vim.bo[ui.bufnr].modifiable = true
-  vim.api.nvim_buf_set_lines(ui.bufnr, 0, -1, false, lines)
-  vim.bo[ui.bufnr].modifiable = false
+  float.set_lines(ui.bufnr, lines, { modifiable = false })
 end
 
 local function close()
@@ -76,27 +75,19 @@ function M.open()
   end
   local width = math.min(math.max(60, math.floor(vim.o.columns * 0.8)), math.max(1, vim.o.columns - 4))
   local height = math.min(math.max(12, math.floor(vim.o.lines * 0.7)), math.max(1, vim.o.lines - 4))
-  local bufnr = vim.api.nvim_create_buf(false, true)
-  local winid = vim.api.nvim_open_win(bufnr, true, {
-    relative = "editor",
-    style = "minimal",
-    border = "rounded",
+  local bufnr, winid = float.open({
+    enter = true,
     width = width,
     height = height,
     row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
     col = math.max(0, math.floor((vim.o.columns - width) / 2)),
     title = " Herdr Context History ",
-    title_pos = "center",
+    filetype = "herdr-context-history",
+    modifiable = false,
+    cursorline = true,
   })
   local ui = { bufnr = bufnr, winid = winid, line_to_entry = {} }
   active = ui
-  vim.bo[bufnr].buftype = "nofile"
-  vim.bo[bufnr].bufhidden = "wipe"
-  vim.bo[bufnr].swapfile = false
-  vim.bo[bufnr].filetype = "herdr-context-history"
-  vim.bo[bufnr].modifiable = false
-  vim.wo[winid].wrap = false
-  vim.wo[winid].cursorline = true
 
   local function map(lhs, callback, desc)
     vim.keymap.set("n", lhs, callback, { buffer = bufnr, silent = true, nowait = true, desc = desc })

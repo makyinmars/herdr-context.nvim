@@ -202,11 +202,11 @@ local function write_pinned(workspace_id, pane_id)
   return true
 end
 
-local function find(candidates, pane_id)
+function M.find(candidates, pane_id)
   if not pane_id then
     return nil
   end
-  for _, candidate in ipairs(candidates) do
+  for _, candidate in ipairs(candidates or {}) do
     if candidate.pane_id == pane_id then
       return candidate
     end
@@ -297,7 +297,7 @@ function M.resolve(config, picker, opts, callback)
     end
 
     if not opts.force then
-      local remembered = find(candidates, selected and selected.pane_id)
+      local remembered = M.find(candidates, selected and selected.pane_id)
       if remembered then
         selected = remembered
         state.set_target(remembered.pane_id)
@@ -310,7 +310,7 @@ function M.resolve(config, picker, opts, callback)
         state.set_target(nil)
       end
 
-      local pinned = find(candidates, read_pinned(vim.env.HERDR_WORKSPACE_ID))
+      local pinned = M.find(candidates, read_pinned(vim.env.HERDR_WORKSPACE_ID))
       if pinned then
         selected = pinned
         state.set_target(pinned.pane_id)

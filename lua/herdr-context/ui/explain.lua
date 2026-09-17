@@ -1,22 +1,14 @@
 local M = {}
 
 local config = require("herdr-context.config")
+local float = require("herdr-context.ui.float")
 local herdr = require("herdr-context.herdr")
 
 local active
 local generation = 0
 
-local function valid(view)
-  return view and vim.api.nvim_buf_is_valid(view.bufnr) and vim.api.nvim_win_is_valid(view.winid)
-end
-
 local function render(view, lines)
-  if not valid(view) then
-    return
-  end
-  vim.bo[view.bufnr].modifiable = true
-  vim.api.nvim_buf_set_lines(view.bufnr, 0, -1, false, lines)
-  vim.bo[view.bufnr].modifiable = false
+  float.set_lines(view.bufnr, lines, { modifiable = false })
 end
 
 local function value(item)
@@ -168,36 +160,24 @@ end
 function M.open(agent, opts)
   opts = opts or {}
   M.close()
-  local bufnr = vim.api.nvim_create_buf(false, true)
   local max_width = math.max(1, vim.o.columns - 4)
   local max_height = math.max(1, vim.o.lines - vim.o.cmdheight - 4)
   local width = math.min(math.max(52, math.floor(vim.o.columns * 0.75)), max_width)
   local height = math.min(math.max(12, math.floor((vim.o.lines - vim.o.cmdheight) * 0.75)), max_height)
   local label = agent.display_agent or agent.agent or "agent"
-  local winid = vim.api.nvim_open_win(bufnr, true, {
-    relative = "editor",
-    style = "minimal",
-    border = "rounded",
+  local bufnr, winid = float.open({
+    enter = true,
     width = width,
     height = height,
     row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
     col = math.max(0, math.floor((vim.o.columns - width) / 2)),
     title = (" %s · detection explanation "):format(label),
-    title_pos = "center",
+    filetype = "herdr-context-explain",
+    modifiable = false,
+    wrap = true,
   })
   local view = { bufnr = bufnr, winid = winid, agent = agent, source_winid = opts.source_winid }
   active = view
-
-  vim.bo[bufnr].buftype = "nofile"
-  vim.bo[bufnr].bufhidden = "wipe"
-  vim.bo[bufnr].swapfile = false
-  vim.bo[bufnr].filetype = "herdr-context-explain"
-  vim.bo[bufnr].modifiable = false
-  vim.wo[winid].number = false
-  vim.wo[winid].relativenumber = false
-  vim.wo[winid].signcolumn = "no"
-  vim.wo[winid].foldcolumn = "0"
-  vim.wo[winid].wrap = true
 
   for _, key in ipairs({ "q", "<Esc>" }) do
     vim.keymap.set("n", key, M.close, { buffer = bufnr, silent = true, nowait = true, desc = "Close explanation" })

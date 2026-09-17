@@ -1,14 +1,17 @@
+local bundle = require("herdr-context.bundle")
+
 local M = {}
 
 function M.reference(request, start_line, end_line, path)
   path = path or request.relative_path
-  if not path or path == "" then
-    return ("Unnamed buffer L%d-L%d"):format(start_line, end_line)
+  local reference = bundle.file_reference_string(path, start_line, end_line)
+  if reference then
+    return reference
   end
-  if start_line == end_line then
-    return ("@%s#L%d"):format(path, start_line)
+  if start_line == nil then
+    return "Unnamed buffer"
   end
-  return ("@%s#L%d-L%d"):format(path, start_line, end_line)
+  return ("Unnamed buffer L%d-L%d"):format(start_line, end_line or start_line)
 end
 
 function M.range_content(bufnr, start_line, end_line)

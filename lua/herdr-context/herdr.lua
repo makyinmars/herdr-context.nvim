@@ -313,10 +313,6 @@ function M.prompt(config, pane_id, text, callback, opts)
   end)
 end
 
-function M.submit(config, pane_id, callback)
-  return M.run(config, { "pane", "send-keys", pane_id, "enter" }, callback)
-end
-
 function M.focus(config, pane_id, callback)
   return M.run(config, { "agent", "focus", pane_id }, callback)
 end

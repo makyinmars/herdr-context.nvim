@@ -1,6 +1,7 @@
 local M = {}
 
 local config = require("herdr-context.config")
+local display = require("herdr-context.agent_display")
 local herdr = require("herdr-context.herdr")
 local state = require("herdr-context.state")
 local targets = require("herdr-context.targets")
@@ -14,38 +15,15 @@ local subscriber
 local filter_text = ""
 local collapsed = {}
 
-local status_icons = {
-  idle = "●",
-  working = "◉",
-  blocked = "!",
-  done = "✓",
-  unknown = "○",
-}
-
-local status_highlights = {
-  idle = "HerdrContextIdle",
-  working = "HerdrContextWorking",
-  blocked = "HerdrContextBlocked",
-  done = "HerdrContextDone",
-  unknown = "HerdrContextUnknown",
-}
+local status_icons = display.icons
+local status_highlights = display.highlights
 
 local function notify(message, level)
   vim.notify(message, level or vim.log.levels.INFO, { title = "herdr-context.nvim" })
 end
 
 local function setup_highlights()
-  for name, link in pairs({
-    HerdrContextIdle = "DiagnosticOk",
-    HerdrContextDone = "DiagnosticOk",
-    HerdrContextWorking = "DiagnosticInfo",
-    HerdrContextBlocked = "DiagnosticError",
-    HerdrContextUnknown = "Comment",
-    HerdrContextTarget = "Special",
-    HerdrContextDisconnected = "DiagnosticWarn",
-  }) do
-    vim.api.nvim_set_hl(0, name, { default = true, link = link })
-  end
+  display.setup_highlights()
 end
 
 local function valid_buffer()

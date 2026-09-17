@@ -7,6 +7,7 @@ local builtins_loaded = false
 
 local builtin_modules = {
   "herdr-context.providers.selection",
+  "herdr-context.providers.files",
   "herdr-context.providers.symbol",
   "herdr-context.providers.hunk",
   "herdr-context.providers.diagnostics",
@@ -208,12 +209,40 @@ function M.collect(request, opts, callback)
           complete(entry, "unavailable", nil, "No context at the current position")
           return
         end
-        local normalized, normalize_err = bundle.normalize(section, provider)
-        if not normalized then
-          complete(entry, "failed", nil, normalize_err)
+        local section_list
+        if type(section) == "table" and section.id == nil and type(section[1]) == "table" then
+          section_list = section
+        else
+          section_list = { section }
+        end
+        if #section_list == 0 then
+          complete(entry, "unavailable", nil, "No context at the current position")
           return
         end
-        complete(entry, "available", normalized)
+        local normalized_list = {}
+        for _, item in ipairs(section_list) do
+          local normalized, normalize_err = bundle.normalize(item, provider)
+          if not normalized then
+            complete(entry, "failed", nil, normalize_err)
+            return
+          end
+          normalized_list[#normalized_list + 1] = normalized
+        end
+        entry.id = normalized_list[1].id
+        entry.name = normalized_list[1].title or entry.name
+        for index = 2, #normalized_list do
+          local extra = normalized_list[index]
+          entries[#entries + 1] = {
+            id = extra.id,
+            name = extra.title or extra.id,
+            priority = extra.priority or entry.priority,
+            provider = provider,
+            status = "available",
+            section = extra,
+            done = true,
+          }
+        end
+        complete(entry, "available", normalized_list[1])
       end
 
       local ok, cancel_or_err = pcall(provider.collect, request, provider_callback)
