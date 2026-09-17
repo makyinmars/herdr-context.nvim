@@ -1,22 +1,21 @@
 # herdr-context.nvim
 
-See live [Herdr](https://herdr.dev) agents inside Neovim and stage file references in their prompts without
-submitting them.
+This plugin shows live [Herdr](https://herdr.dev) agents inside Neovim. You can stage file references in their prompts. Staging puts text in the prompt and does not submit it.
 
-`herdr-context.nvim` is one repository with two install surfaces:
+This repository has two parts. The Neovim plugin collects context and stages it. Context is the file references and related items that you attach.
 
-- a Neovim plugin for collecting, formatting, and staging context;
-- a Herdr companion plugin with a transient popup for pinning the default target agent.
+The companion plugin is the Herdr-side plugin. It opens a short-lived popup so that you can pin the default target. A target is the destination agent pane.
 
 ## Requirements
 
+You need:
+
 - Neovim 0.10 or newer
 - Herdr 0.9.1 or newer
-- `jq` for the optional Herdr popup target picker on Linux and macOS
-- Windows PowerShell 5.1 or newer for the optional picker on Windows
+- `jq` for the optional target picker popup on Linux and macOS
+- Windows PowerShell 5.1 or newer for the optional picker on Windows.
 
-Neovim should normally be running in a Herdr pane so `HERDR_PANE_ID`, `HERDR_TAB_ID`, and
-`HERDR_WORKSPACE_ID` are available.
+Run Neovim in a Herdr pane. Then `HERDR_PANE_ID`, `HERDR_TAB_ID`, and `HERDR_WORKSPACE_ID` are available.
 
 ## Installation
 
@@ -100,7 +99,7 @@ Install the Neovim side with lazy.nvim:
 }
 ```
 
-For local development, point both systems at the same checkout:
+If you develop locally, point both systems at the same checkout:
 
 ```sh
 herdr plugin link /path/to/herdr-context.nvim
@@ -121,22 +120,21 @@ herdr plugin link /path/to/herdr-context.nvim
 | `:HerdrContextReference` | Stage `@path#L10-L20` |
 | `:HerdrContextSend` | Stage the reference and selected code |
 | `:HerdrContextDiagnostics` | Stage diagnostics for the current line or selection |
-| `:HerdrContextCompose [preset]` | Collect, preview, and stage a combined context bundle |
-| `:HerdrContextPrompt` | Open directly in the message editor with the current line or Visual selection attached |
-| `:HerdrContextDelegate <kind> [preset]` | Create an agent and delegate a reviewed composer bundle |
+| `:HerdrContextCompose [preset]` | Open the composer to collect, preview, and stage context |
+| `:HerdrContextPrompt` | Open the message editor with the current line or Visual selection attached |
+| `:HerdrContextDelegate <kind> [preset]` | Create an agent and send a reviewed composer payload |
 | `:HerdrContextSymbol` | Stage the innermost symbol under the cursor |
 | `:HerdrContextHunk` | Stage the Git hunk under the cursor |
 | `:HerdrContextQuickfix` | Stage the current quickfix list |
-| `:HerdrContextLocationList` | Stage the current window's location list |
+| `:HerdrContextLocationList` | Stage the current window location list |
 | `:HerdrContextTarget` | Choose or change the destination agent |
-| `:HerdrContextAgents` | Toggle the live agent drawer |
+| `:HerdrContextAgents` | Open or close the live agent drawer |
 | `:HerdrContextExplainAgent` | Explain how Herdr detected an agent and assigned its state |
 | `:HerdrContextHistory` | Inspect, clear, or restage session history |
-| `:HerdrContextRefresh` | Force a cached-state refresh |
-| `:checkhealth herdr-context` | Check Neovim, environment, Herdr, agents, and the companion plugin |
+| `:HerdrContextRefresh` | Refresh the cached Herdr state |
+| `:checkhealth herdr-context` | Report Neovim, environment, Herdr, agents, and companion plugin status |
 
-The range-aware context commands accept an Ex range. Lua calls made from Visual mode preserve linewise,
-characterwise, reversed, and blockwise selections.
+The agent drawer is a side window that lists live agents. Context commands that take a range accept an Ex range. An Ex range is a line range on the command. Lua calls from Visual mode keep linewise, characterwise, reversed, and blockwise selections.
 
 ## Configuration
 
@@ -267,10 +265,9 @@ require("herdr-context").setup({
 })
 ```
 
-Set `presence.enabled = false` to disable the bootstrap snapshot, socket subscription, reconnect timers,
-and polling fallback. Existing v0.1 configurations remain valid.
+If you set `presence.enabled = false`, the plugin does not fetch live agent state. It skips the first snapshot, the socket subscription, reconnect timers, and polling. A snapshot is a full copy of live Herdr state. v0.1 configuration files still work.
 
-Additional transport options are available for unusual agents:
+These configuration keys control multiline transport:
 
 ```lua
 require("herdr-context").setup({
@@ -286,32 +283,23 @@ require("herdr-context").setup({
 })
 ```
 
-In `auto` mode, multiline payloads for Claude, Codex, Grok, and OpenCode use terminal bracketed-paste sequences.
-Unknown agents receive a single-line reference to a temporary Markdown context file. This avoids
-injecting literal newline bytes into an agent that may interpret them as Enter.
+In `auto` mode, multiline payloads for Claude, Codex, Grok, and OpenCode use terminal bracketed-paste sequences. Bracketed paste is a terminal method that pastes many lines as one input. Unknown agents get a one-line reference to a temporary Markdown context file. The context file prevents a raw newline from acting as Enter.
 
-Stage-only transport uses Herdr's `pane send-text` API so staging remains non-submitting. In `auto` mode,
-the bracketed-paste contract keeps both lines in the input editor while the agent remains `idle`. Unknown
-or newly introduced agent families remain on the conservative context-file path until configured.
-Explicit submission (`S`, `<C-Enter>`, or `submit = true`) sends the original payload through
-`herdr agent prompt`, which validates the live agent and handles its input mode and Enter atomically.
+Stage-only transport uses the `pane send-text` API in Herdr. Staging does not submit the prompt. In `auto` mode, bracketed paste keeps all lines in the input editor while the agent is `idle`. Unknown or new agent families use the context-file path until you add them to `bracketed_paste_agents`.
+
+If you press `S` or `<C-Enter>`, or if you set `submit = true`, the plugin sends the original payload with `herdr agent prompt`. That command makes sure that the agent is live. Then it handles the input mode and Enter in one step.
 
 ## Context composer
 
-The composer freezes the source buffer, cursor, selection, changedtick, path, and working directory
-before providers begin. Providers collect independently, and one timeout or failure does not block the
-others. One stacked float shows the live agent list, the message, attached `@path#L…` references, and the
-exact payload that will be staged. Code is not dumped into the prompt unless you embed a row.
+The composer is one floating window with stacked panes. It stores the source buffer, cursor, selection, changedtick, path, and working directory before providers start. A provider is a collector that finds one kind of context. Providers collect at the same time. One timeout or failure does not block the others.
 
-For the fastest code-to-agent flow, select code in Visual mode and run `:HerdrContextPrompt` (or map
-`require("herdr-context").prompt()`). The message editor opens immediately inside the composer with that
-range attached as a reference. Write the thought you would otherwise type in the agent, then press
-`<C-Enter>` to send and submit it. `<C-s>` keeps the message so you can inspect or adjust attached
-references first. In Normal mode, the same action starts from the current line and discovers the
-containing symbol, hunk, and diagnostics.
+The panes show the live agent list, the message, attached `@path#L…` references, and the exact payload that will be staged. A payload is the exact text that the plugin will stage. If you do not embed a row, the plugin does not dump code into the prompt.
 
-Tracking is opt-in for Lua callers. It submits through `agent prompt --wait` and observes the agent
-until it reaches `idle`, unseen `done`, or `blocked`:
+Select code in Visual mode. Run `:HerdrContextPrompt` (or map `require("herdr-context").prompt()`). The message editor opens inside the composer with that range attached as a reference. Type the prompt in the message editor.
+
+Then press `<C-Enter>` to send and submit it. Press `<C-s>` to keep the message so that you can inspect or adjust attached references first. In Normal mode, the same action starts from the current line and finds the containing symbol, hunk, and diagnostics.
+
+Lua callers can turn on tracking. Tracking submits through `agent prompt --wait` and watches the agent until it reaches `idle`, unseen `done`, or `blocked`:
 
 ```lua
 require("herdr-context").prompt({
@@ -321,19 +309,17 @@ require("herdr-context").prompt({
 })
 ```
 
-Ordinary `<C-Enter>` remains a short-lived send and does not wait. A tracked `blocked` result focuses
-the agent and opens its output; `idle` and `done` notify completion. A tracking timeout or
-`agent_prompt_stalled` warning does not cancel the remote task, which may continue running.
+`<C-Enter>` sends and does not wait. A tracked `blocked` result focuses the agent and opens its output. `idle` and `done` notify completion. A tracking timeout or `agent_prompt_stalled` warning does not cancel the remote task. The remote task can continue to run.
 
 ### Delegating to a new agent
 
-`:HerdrContextDelegate codex review` opens the composer with the `review` preset and a new Codex agent
-as its destination. After reviewing the exact bundle and pressing `s` or `S`, choose whether to split
-the current tab, create a tab, or create a workspace, then choose whether to send without waiting or
-wait and preview the result. Herdr creates an unfocused shell pane, starts a uniquely named `reviewer`
-with `agent start`, selects it as the context target, and submits the bundle with `agent prompt`.
+A bundle is the combined payload from the selected providers. `:HerdrContextDelegate codex review` opens the composer with the `review` preset and a new Codex agent as its destination.
 
-Lua callers can bypass either picker and customize startup:
+Review the exact bundle. Press `s` or `S`. Then choose split, tab, or workspace. Then choose to send without waiting, or to wait and preview the result.
+
+Herdr creates an unfocused shell pane. It starts a uniquely named `reviewer` with `agent start`. It selects that agent as the context target. Then it submits the bundle with `agent prompt`.
+
+Lua callers can skip either picker and set startup values:
 
 ```lua
 require("herdr-context").delegate({
@@ -350,51 +336,44 @@ require("herdr-context").delegate({
 })
 ```
 
-Cancelling either choice leaves the composer open. Accepting both choices freezes the reviewed bundle
-and closes the composer before any side effect; optional lifecycle tracking then continues in the
-background. Post-creation failures identify the retained pane or agent instead of deleting it or
-blindly retrying. An `agent_name_taken` race retries a unique name in the same pane, while startup and
-prompt timeouts are reported without cancelling or duplicating the remote process.
+If you cancel either choice, the composer stays open. If you accept both choices, the plugin stores the reviewed bundle. Then it closes the composer before any other action. Optional lifecycle tracking then continues in the background.
 
-Normal mode selects the innermost symbol, the hunk under the cursor, and diagnostics scoped to the
-symbol (then the hunk). If neither symbol nor hunk is available, it selects the current line. Visual
-mode selects the exact Visual range and overlapping diagnostics, leaving symbol and hunk unchecked.
-Empty diagnostics are not attached. Quickfix, location-list, and Trouble sources stay collapsed until
-they have items.
+If creation fails after the composer closes, the plugin reports the kept pane or agent. It does not delete it. It does not retry without a new decision. If the name is taken (`agent_name_taken`), the plugin retries a unique name in the same pane. The plugin reports startup and prompt timeouts. It does not cancel or duplicate the remote process.
 
-Composer controls are:
+Normal mode selects the innermost symbol, the hunk under the cursor, and diagnostics scoped to the symbol (then the hunk). If neither symbol nor hunk is available, it selects the current line. Visual mode selects the exact Visual range and overlapping diagnostics. It does not select symbol or hunk. Empty diagnostics are not attached. If Quickfix, location-list, or Trouble sources have no items, they stay collapsed.
 
-- `<Space>`: attach or detach the reference under the cursor;
-- `e`: embed the buffer snippet for that row instead of a file reference;
-- `i`: focus the message editor;
-- `t` / `<CR>` on an agent row: pin that Herdr agent as the target;
-- `P`: apply a named provider preset;
-- `r`: recapture the source and rerun providers;
-- `s`: stage the exact preview (or stage and submit when `submit = true`);
-- `S` / `<C-Enter>`: send with `herdr agent prompt`;
-- `p`: toggle the payload preview;
-- `h`: inspect the session staging history;
-- `<C-h>` / `<C-j>` / `<C-k>` / `<C-l>`: move between composer panes (up/down, or wrap when there is no left/right pane);
-- `<Tab>`: cycle agent, message, references, and preview panes;
-- `?`: show the key reference;
-- `q` or `<Esc>`: cancel.
+The composer also lists whole-file `@path` references for the current file, the alternate file (`#`), and other listed buffers. These rows start detached. Press `<Space>` to attach one. If you want them selected at composer open, add `file`, `alternate`, or `buffers` to a preset.
 
-Presets can also be selected directly with commands such as `:HerdrContextCompose debug`. Only available
-providers with content are selected. The message is included at the top of the payload as plain text.
-Keep it with `<C-s>`, send it with `<C-Enter>` (or `<M-Enter>` in terminals that do not distinguish
-Control-Enter), or cancel with `q` from Normal mode.
+Composer keys:
 
-If the buffer has unsaved changes, the composer warns before sending a disk reference. Press `e` to
-embed the live snippet, or press `s` again to send the path anyway.
+- `<Space>` attaches or detaches the reference under the cursor.
+- `e` embeds the buffer snippet for that row instead of a file reference.
+- `i` focuses the message editor.
+- `1` through `9` pick that live agent in the agent pane.
+- `t` or `<CR>` on an agent row pins that Herdr agent as the target.
+- `P` applies a named provider preset.
+- `r` recaptures the source and reruns providers.
+- `s` stages the exact preview. If `submit` is `true`, `s` also submits.
+- `S` or `<C-Enter>` sends with `herdr agent prompt`.
+- `p` toggles the payload preview.
+- `h` opens the session staging history.
+- `<C-h>`, `<C-j>`, `<C-k>`, and `<C-l>` move between composer panes. If a direction has no neighbor, focus wraps.
+- `<Tab>` cycles the agent, message, references, and preview panes.
+- `<S-Tab>` cycles those panes in reverse.
+- `?` shows the key reference.
+- `q` or `<Esc>` cancels.
 
-Editing the source buffer marks the preview stale and disables staging until it is refreshed. The
-combined final payload is rejected when it exceeds `max_payload_bytes`; sections are never silently
-truncated or dropped.
+In the message buffer, insert-mode `<C-j>`, `<C-k>`, and `<C-l>` leave insert mode and move panes. Insert-mode `<C-h>` is not remapped. It stays as Neovim backspace.
 
-The symbol provider asks every eligible LSP client for document symbols, deterministically chooses the
-smallest containing range, and falls back to Treesitter. The hunk provider prefers MiniDiff because it
-can include unsaved changes, then uses `git diff` for saved buffers. Trouble is only consulted when the
-plugin is loaded and a configured view is open.
+You can also select a preset with a command such as `:HerdrContextCompose debug`. Only available providers with content are selected. The message is included at the top of the payload as plain text.
+
+Press `<C-s>` to keep the message. Press `<C-Enter>` to send it. If the terminal does not distinguish Control-Enter, press `<M-Enter>`. Press `q` in Normal mode to cancel.
+
+If the buffer has unsaved changes, the composer warns before sending a disk reference. Press `e` to embed the live snippet. Press `s` again to send the path anyway.
+
+If you edit the source buffer, the plugin marks the preview as stale. The plugin disables staging until you refresh. If the combined payload exceeds `max_payload_bytes`, the plugin rejects it. It does not truncate or drop sections.
+
+The symbol provider asks every eligible LSP client for document symbols. It chooses the smallest containing range. If LSP has no result, it falls back to Treesitter. The hunk provider prefers MiniDiff because MiniDiff can include unsaved changes. Then it uses `git diff` for saved buffers. If the Trouble plugin is loaded and an open view matches `providers.trouble.modes`, Trouble is used.
 
 Custom providers use the same timeout, preview, and byte-budget path:
 
@@ -415,21 +394,17 @@ require("herdr-context").register_provider({
 })
 ```
 
-`collect` may return a cancellation function. It must call its callback at most once with either a
-normalized section or an error. Optional integrations should report unavailable state instead of
-throwing; `:checkhealth herdr-context` summarizes the currently usable backends.
+`collect` can return a cancellation function. It must call its callback at most once with either a normalized section or an error. Optional integrations must report unavailable state instead of throwing. `:checkhealth herdr-context` summarizes the backends that you can use.
 
 ## Live presence
 
-One shared state store serves the statusline, agent drawer, and target UI. Setup fetches an initial
-snapshot, then subscribes to Herdr events over `HERDR_SOCKET_PATH`. Unix socket paths are used directly;
-on Windows, bare pipe names are mapped to `\\.\pipe\<name>` and health checks test the named pipe by
-connecting instead of treating it as a filesystem entry. If the connection drops, cached data is marked
-stale, polling starts, and reconnects use exponential backoff. Polling stops after reconnect. Every pipe
-and timer closes on `VimLeavePre`.
+One shared state store serves the statusline, agent drawer, and target UI. During setup, the plugin fetches an initial snapshot. Then it subscribes to Herdr events over `HERDR_SOCKET_PATH`.
 
-The statusline reads only cached Lua state; it never starts a process or performs socket I/O during a
-redraw:
+The plugin uses Unix socket paths as given. On Windows, it maps a bare pipe name to `\\.\pipe\<name>`. It tests the named pipe by connecting. It does not treat the name as a filesystem entry.
+
+If the connection drops, the plugin marks cached data as stale. Then it starts polling. Reconnects use exponential backoff. Polling stops after reconnect. Every pipe and timer closes on `VimLeavePre`.
+
+The statusline reads only cached Lua state. It does not start a process or do socket I/O during a redraw:
 
 ```lua
 require("herdr-context").statusline()
@@ -449,37 +424,28 @@ For lualine:
 }
 ```
 
-The native agent drawer is a scratch-buffer split. Its controls are:
+The native agent drawer is a scratch-buffer split. Its keys are:
 
-- `<CR>` or `t`: select the pane as the context target;
-- `f`: focus the Herdr pane;
-- `p`: preview 80 lines of the agent's recent output;
-- `P`: request the deeper 300-line transcript;
-- `e`: show Herdr's agent-detection, matched-rule, lifecycle-authority, and evidence explanation;
-- `/`: filter agents by name, status, workspace, tab, path, or message;
-- `<Space>`: collapse or expand the workspace/tab group under the cursor;
-- `c`: clear the active filter;
-- `r`: force a state refresh;
-- `q`: close the drawer.
+- `<CR>` or `t` selects the pane as the context target.
+- `f` focuses the Herdr pane.
+- `p` previews 80 lines of recent agent output.
+- `P` requests the deeper 300-line transcript.
+- `e` shows Herdr agent-detection, matched-rule, lifecycle-authority, and evidence explanation.
+- `/` filters agents by name, status, workspace, tab, path, or message.
+- `<Space>` collapses or expands the workspace or tab group under the cursor.
+- `c` clears the active filter.
+- `r` forces a state refresh.
+- `q` closes the drawer.
 
-Agents are grouped by workspace and tab by default. Output is read only when `p` or `P` is pressed;
-the drawer never reads agent output in the background. With a Herdr socket, previews use `agent.read`
-so truncation metadata is retained. A busy agent automatically falls back from alternate-screen
-history to its live viewport, and the preview labels both that fallback and any omitted older output.
-Without a socket, the text-only CLI remains the compatibility fallback. The adjacent preview uses
-`agents_view.preview_width`; `preview_lines` and `deep_preview_lines` bound the two transcript depths.
-Press `r` inside the output pane to refresh it.
+The drawer groups agents by workspace and tab by default. The drawer reads output only after you press `p` or `P`. It never reads agent output in the background. With a Herdr socket, previews use `agent.read`, so truncation metadata is kept. If the agent is busy, the preview falls back from alternate-screen history to the live viewport. The preview labels that fallback and any omitted older output.
 
-`:HerdrContextExplainAgent` resolves a target and runs `herdr agent explain <pane> --json`. The same
-view is available with `e` in the drawer. It reports the final state, active and cached manifest
-versions, winning and evaluated rules, visible evidence, lifecycle authority, and fallback or skipped
-reasons. This is Herdr's authoritative detector output; the plugin does not duplicate screen parsing.
+If there is no socket, the plugin uses the text-only CLI. The adjacent preview uses `agents_view.preview_width`. `preview_lines` and `deep_preview_lines` bound the two transcript depths. Press `r` inside the output pane to refresh it.
 
-The `presence.notifications` flags opt into desktop-visible Neovim notifications when an existing
-agent transitions to `idle`, unseen `done`, or `blocked`. Initial snapshots do not notify, and all
-transitions are disabled by default.
+`:HerdrContextExplainAgent` resolves a target and runs `herdr agent explain <pane> --json`. The same view is available with `e` in the drawer. It reports the final state, active and cached manifest versions, winning and evaluated rules, visible evidence, lifecycle authority, and fallback or skipped reasons. This is Herdr detector output. The plugin does not parse the screen again.
 
-Advanced consumers can read or subscribe to immutable snapshots:
+The `presence.notifications` flags turn on desktop-visible Neovim notifications for an existing agent that moves to `idle`, unseen `done`, or `blocked`. Initial snapshots do not notify. All of these transitions are off by default.
+
+You can read or subscribe to snapshots. The copy does not change after you receive it:
 
 ```lua
 local state = require("herdr-context.state")
@@ -491,49 +457,37 @@ state.unsubscribe(subscription)
 state.refresh({ force = true }, function(snapshot, err) end)
 ```
 
-State changes emit `User` events named `HerdrContextUpdated`, `HerdrContextTargetChanged`,
-`HerdrContextAgentStatusChanged`, `HerdrContextConnected`, and `HerdrContextDisconnected`. Relevant
-event details are available through `vim.v.event` and autocmd callback `data`.
+State changes emit `User` events named `HerdrContextUpdated`, `HerdrContextTargetChanged`, `HerdrContextAgentStatusChanged`, `HerdrContextConnected`, and `HerdrContextDisconnected`. You can read relevant event details in `vim.v.event` and autocmd callback `data`.
 
-Socket presence reads the server version, opens the lifecycle subscription, and takes an authoritative
-snapshot while buffering new events. It then applies pane, tab, workspace, and agent-status events
-directly to the shared cache. New and removed agents gain or lose a dedicated status stream without
-reconnecting the lifecycle subscription. Further full snapshots are reserved for reconnects, explicit
-refreshes, unknown or inconsistent events, and backwards pane revisions. Herdr 0.8-only events such as
-`workspace.reordered` are subscribed only when the snapshot reports a compatible version.
+Socket presence reads the server version. Then it opens the lifecycle subscription. Then it takes a snapshot and buffers new events during that snapshot.
+
+It then applies pane, tab, workspace, and agent-status events directly to the shared cache. New and removed agents gain or lose a dedicated status stream without reconnecting the lifecycle subscription. The plugin reserves further full snapshots for reconnects, explicit refreshes, unknown or inconsistent events, and backwards pane revisions. The plugin always subscribes to `workspace.reordered`.
 
 ## Target selection
 
-The shared snapshot supplies live agent and layout metadata. Candidates are ranked by:
+The shared snapshot gives live agent and layout metadata. The plugin ranks candidates by:
 
-1. same tab;
-2. same workspace;
-3. same exact worktree;
-4. another worktree from the same repository;
-5. same working directory;
-6. same Git root;
-7. other agents in the session.
+1. Same tab
+2. Same workspace
+3. Same exact worktree
+4. Another worktree from the same repository
+5. Same working directory
+6. Same Git root
+7. Other agents in the session.
 
-Herdr workspace provenance is preferred for the worktree comparisons. Working-directory and Git-root
-matching remain available as lower-priority signals. `target_scope` filters that list before ranking:
-`"project"` includes the current repository's worktrees and cwd/Git-root matches, while `"tab"`,
-`"workspace"`, and `"session"` retain their narrower or broader meanings. The current Herdr pane is
-excluded. Pane IDs are used internally because labels such as `codex` are not necessarily unique. When
-Herdr changes a workspace-qualified pane ID during a move, the session selection and any persisted
-workspace pins are migrated to the new ID.
+A worktree is a Git working copy of a repository. The plugin prefers Herdr workspace data for worktree comparisons. Working-directory and Git-root matching stay as lower-priority signals.
 
-The selected pane is still checked against a fresh snapshot before every send. With the default
-`remember_target = "session"`, the picker reopens whenever multiple agents are live instead of silently
-reusing the previous destination. A sole remaining candidate is selected when `auto_select = true`.
-`vim.ui.select` drives the picker, so existing Snacks integrations are honored.
+`target_scope` filters that list before ranking. `"project"` includes the current repository worktrees and cwd or Git-root matches. `"tab"`, `"workspace"`, and `"session"` keep their narrower or broader meanings. The current Herdr pane is excluded.
 
-The Herdr companion action `herdr-context.pin-target` on Linux/macOS, or
-`herdr-context.pin-target-windows` on Windows, opens an 80%-wide, 20-row popup picker. The popup is
-transient: it does not join the tiled layout, appear in agent snapshots, or emit pane lifecycle events,
-and it closes when the picker exits. The Bash picker uses `jq`; the Windows picker uses only the bundled
-Windows PowerShell runtime. It stores one pane ID per workspace in the plugin config directory. Neovim
-reads the same file. Set `remember_target = "workspace"` to make Neovim selections update it too and
-keep that explicit pin across sends, or set `HERDR_CONTEXT_CONFIG` to override the shared file path.
+The plugin uses pane IDs internally because labels such as `codex` are not unique. If Herdr changes a workspace-qualified pane ID during a move, the plugin migrates the session selection and any stored workspace pins to the new ID.
+
+Before every send, the plugin makes sure that the selected pane is still in a fresh snapshot. If `remember_target` is `"session"` (the default) and more than one agent is live, the picker opens again. The plugin does not reuse the previous destination without asking. If only one candidate remains and `auto_select` is `true`, the plugin selects it. `vim.ui.select` drives the picker. Snacks integrations work with this picker.
+
+The Herdr companion action `herdr-context.pin-target` on Linux/macOS, or `herdr-context.pin-target-windows` on Windows, opens an 80%-wide, 20-row popup picker. The popup does not join the tiled layout. It does not appear in agent snapshots. It does not emit pane lifecycle events. If the picker exits, the popup closes.
+
+The Bash picker uses `jq`. The Windows picker uses only the bundled Windows PowerShell runtime. It stores one pane ID per workspace in the plugin configuration directory. Neovim reads the same file.
+
+If you set `remember_target = "workspace"`, Neovim selections update that file too. Then the pin stays across sends. If you set `HERDR_CONTEXT_CONFIG`, the plugin uses that path for the shared file.
 
 ## Payloads
 
@@ -545,7 +499,7 @@ Explain the snacks zen toggles.
 @lua/plugins/snacks.lua#L53-L60
 ```
 
-Press `e` on a row, or set `composer.include = "content"`, to embed the snippet:
+Press `e` on a row to embed the snippet. You can also set `composer.include = "content"`:
 
 ````text
 Explain the snacks zen toggles.
@@ -561,15 +515,11 @@ zen = {
 ```
 ````
 
-`:HerdrContextReference` still stages a single `@path#L10-L20` line. `:HerdrContextSend` still embeds
-the selected code. Paths are relative to the Git root, falling back to Neovim's working directory.
-Modified buffers are marked `(unsaved changes)`. Unnamed buffers have no stable path, so they are
-embedded. Markdown fences expand past the longest backtick run in the selection. Drive-letter and UNC
-paths are normalized and compared case-insensitively on Windows; context-file references use forward
-slashes so they remain unambiguous in agent prompts. Payloads over `max_payload_bytes` are rejected
-rather than truncated.
+`:HerdrContextReference` stages a single `@path#L10-L20` line. `:HerdrContextSend` embeds the selected code. Paths are relative to the Git root. If there is no Git root, paths are relative to the Neovim working directory. The plugin marks modified buffers as `(unsaved changes)`. Unnamed buffers have no stable path, so they are embedded.
 
-Diagnostics are compact lists, and they are omitted when empty:
+Markdown fences expand past the longest backtick run in the selection. The plugin normalizes drive-letter and UNC paths. On Windows, path comparison ignores case. Context-file references use forward slashes so that they stay clear in agent prompts. If a payload is over `max_payload_bytes`, the plugin rejects it. It does not truncate the payload.
+
+Diagnostics are short lists. The plugin omits empty diagnostics:
 
 ```text
 - ERROR [typescript:2345] L21: Argument is not assignable…
@@ -578,30 +528,22 @@ Diagnostics are compact lists, and they are omitted when empty:
 
 ## Safety contract
 
-Safety exclusions are applied before bundle construction. Current-buffer sections matching
-`safety.exclude_patterns` are blocked, while matching items in list providers are removed and reported.
-Selected content is also checked against `safety.secret_patterns`. The composer shows warnings and
-requires a second `s` press after review; direct staging commands use an explicit confirmation picker.
-Changing the payload invalidates an earlier confirmation. Safety checks never print the matched secret.
-The default patterns cover AWS keys, private keys, common assignments, GitHub and Slack tokens, GCP
-service-account JSON, and JWTs. Entropy scanning also warns about long, unformatted values when a
-secret-related word or identifier part is on the same line.
+The plugin applies safety exclusions before it builds the bundle. The plugin blocks current-buffer sections that match `safety.exclude_patterns`. It removes matching items in list providers and reports them. The plugin also matches selected content against `safety.secret_patterns`.
 
-Successful stages are retained in memory up to `history.max_entries`. `:HerdrContextHistory` can inspect
-the exact payload, clear the list, or restage an entry. History is never written to disk and disappears
-when Neovim exits.
+The composer shows warnings and requires a second `s` press after review. Direct staging commands use a picker that asks you to continue. If you change the payload, you must accept the warning again. The plugin never prints the matched secret. The default patterns cover AWS keys, private keys, common assignments, GitHub and Slack tokens, GCP service-account JSON, and JWTs. If a secret-related word or identifier part is on the same line, entropy scanning also warns about long, unformatted values.
 
-The transport safety guarantees remain:
+Successful stages stay in memory up to `history.max_entries`. `:HerdrContextHistory` can inspect the exact payload, clear the list, or restage an entry. The plugin never writes history to disk. If Neovim exits, history disappears.
 
-Default sends never submit:
+Default sends do not submit:
 
-- context is passed to `herdr pane send-text` as one argv element;
-- no shell-concatenated command is used;
-- multiline input is bracketed-pasted only for configured agents, otherwise staged through a context file;
-- explicit submission passes the original payload to agent-aware `herdr agent prompt` as one argv element;
-- payload size is checked before target resolution or transport.
+- The plugin passes context to `herdr pane send-text` as one argv element.
+- The plugin does not use a shell-concatenated command.
+- The plugin uses bracketed paste for multiline input only for agents in `bracketed_paste_agents`.
+- Other agents are staged through a context file.
+- Explicit submission passes the original payload to agent-aware `herdr agent prompt` as one argv element.
+- The plugin rejects an oversized payload before target resolution or transport.
 
-Keep `submit = false` unless automatic submission is explicitly desired.
+If you want staging only, keep `submit = false`. If `submit` is `true`, the plugin submits the prompt after it stages the text.
 
 ## Development
 
@@ -612,10 +554,6 @@ make lint
 make test-live
 ```
 
-The test suite also covers deterministic bundles, provider timeout and cancellation, LSP symbol
-fixtures, MiniDiff add/change/delete hunks, Git diff parsing, quickfix normalization, stale composer
-buffers, exact preview rendering, and combined byte budgets. Transport tests use a fake Herdr
-executable; presence tests use sanitized socket fixtures and fake clients. Shell smoke tests exercise
-the companion popup launcher and manifest sizing, target ranking, and workspace target persistence.
-Windows CI separately covers drive and UNC paths, named-pipe endpoints and presence probes, exact
-multiline/modified-key transport, and the PowerShell companion picker.
+The test suite covers deterministic bundles, provider timeout and cancellation, and LSP symbol fixtures. It also covers MiniDiff add/change/delete hunks, Git diff parsing, and quickfix normalization. It covers stale composer buffers, exact preview rendering, and combined byte budgets. Transport tests use a fake Herdr executable. Presence tests use sanitized socket fixtures and fake clients.
+
+Shell smoke tests exercise the companion popup launcher and manifest sizing, target ranking, and workspace target persistence. Windows CI covers drive and UNC paths, named-pipe endpoints and presence probes, exact multiline/modified-key transport, and the PowerShell companion picker.
