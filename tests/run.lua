@@ -2339,6 +2339,8 @@ test("renders the drawer with stable pane mappings and actions", function()
   vim.env.HERDR_PANE_ID = old_env.HERDR_PANE_ID
   vim.env.HERDR_WORKSPACE_ID = old_env.HERDR_WORKSPACE_ID
   vim.env.HERDR_TAB_ID = old_env.HERDR_TAB_ID
+  state._reset()
+  targets.clear()
 end)
 
 test("cancels superseded output previews and ignores stale callbacks", function()
@@ -3215,7 +3217,20 @@ end)
 
 test("composer inline picker remembers the chosen agent", function()
   local composer = require("herdr-context.composer")
-  config.setup({ presence = { enabled = false }, remember_target = "session" })
+  state._reset()
+  targets.clear()
+  config.setup({
+    presence = { enabled = false },
+    remember_target = "session",
+    target_scope = "session",
+  })
+  -- Keep two live agents so staging cannot auto-select the only candidate.
+  state._replace({
+    agents = {
+      { pane_id = "w0:p2", agent = "claude", agent_status = "idle" },
+      { pane_id = "w0:p4", agent = "grok", display_agent = "grok", agent_status = "idle" },
+    },
+  }, { connected = true, stale = false, mode = "socket" })
   local source = buffer({ "return 1" }, vim.fn.getcwd() .. "/lua/target-test.lua")
   local request = composer.capture_request({ bufnr = source, winid = vim.api.nvim_get_current_win(), line = 1 })
   local session = composer._create_session(request)
@@ -3252,6 +3267,8 @@ test("composer inline picker remembers the chosen agent", function()
   eq(1, stage_calls)
   session:close()
   delete_buffer(source)
+  state._reset()
+  targets.clear()
 end)
 
 test("registers all user commands", function()
